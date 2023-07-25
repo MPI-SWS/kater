@@ -1,0 +1,46 @@
+let DMB_SY = [F ; SC] | [F ; REL]
+let DMB_LD = [F ; ACQ] | [F ; SC]
+let DMB_ST = [Fwmb]
+let ISB    = [Frmb]   // hack
+let A      = [R ; SC] | [R ; ACQ]
+let Q      = [R ; ACQ] | [R ; SC]
+let L      = [W ; SC] | [W ; REL]
+let R_ret  = [R]      // hack
+
+let dmb.full = DMB_SY
+let dmb.ld = DMB_LD
+let dmb.st = DMB_ST
+
+// Atomic RMW relation
+let amo = rmw
+let rmw = amo // | lxsx
+
+// Local read successor
+let lrs = [W]; po-loc ; ([R] ; po-loc)* ; [R]
+
+// Dependency ordering
+let dob = addr | data
+	| ctrl; [W]
+	| (ctrl | (addr; po)); [ISB] | [ISB]; po //; [R]
+	| addr; po; [W]
+	| (addr | data); lrs
+
+// Atomic ordering
+let aob = rmw
+	| [UW]; lrs; [A | Q]
+
+// Barrier ordering
+let bob = po; [dmb.full]
+        | [dmb.full]; po
+        | po; ([A];amo;[L]); po
+	| [L]; po; [A]
+	| [R_ret]; po; [dmb.ld]; po
+	| [A | Q]; po
+	| [W]; po; [dmb.st]; po; [W]
+	| po; [L]
+
+save[ppo] ppo = (dob | aob | bob)+
+
+let ob = (rfe | mo | fr | ppo)
+
+// acyclic ob

@@ -1,0 +1,39 @@
+// Extended coherence order
+let eco = (rf | mo | fr)+
+
+// ---------------------------------------------------------------------
+// RC11 Happens-before
+// ---------------------------------------------------------------------
+
+let sw = [REL] ; ([F] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F])? ; [ACQ]
+let hb = (po | sw)+
+
+// ---------------------------------------------------------------------
+// IMM Consistency axioms
+// ---------------------------------------------------------------------
+
+let WREL = [W]; [REL]
+let RACQ = [R]; [ACQ]
+let bob = po ; WREL | RACQ ; po | po ; [F] | [F] ; po | WREL ; po-loc ; [W]
+
+let deps = data | ctrl | addr ; po? | rmw
+let ppo = [R] ; (deps | rfi)+ ; [W] | bob
+
+// assert rmw <= ppo
+// assert detour <= ppo
+// assert [R]; po; [W&REL] <= ppo
+
+// No OOTA
+// acyclic (ppo | rf)
+
+// // Coherence : Optimize the checking of irreflexive (hb ; eco)
+// coherence (hb_stable)
+
+// // RMW atomicity
+// check  mo-imm ; [UW] <= rf ; po-imm
+
+// global ordering constraint
+let FSC = [F]; [SC]
+let psc = FSC ; hb ; eco ; hb ; FSC
+let ar = rfe | ppo | detour | psc
+acyclic ar

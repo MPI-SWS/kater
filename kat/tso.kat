@@ -1,0 +1,2 @@
+let ppo = ([R]; po | po ; [F] | [UW|F] ; po | po ; [W])+
+let tso = (ppo | rfe | mo | fr)

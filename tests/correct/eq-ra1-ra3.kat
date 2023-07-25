@@ -1,0 +1,7 @@
+let hb = (po | rf)+
+let ra1 = (hb;fr | hb;mo | hb)
+
+let ra3 = (mo | fr)?;hb
+
+assert [R|W];ra1;[R|W] <=&id rot ra3
+assert ra3 <=&id rot ra1

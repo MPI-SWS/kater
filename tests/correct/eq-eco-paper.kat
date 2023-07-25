@@ -1,0 +1,16 @@
+declare nrf
+declare nrf-1
+declare nco
+
+let nfr = nrf-1; nco
+
+let eco1 = (nrf | nco | nfr)+
+let eco2 = nrf | (nco|nfr);nrf?
+
+assume nco;nco <= nco
+assume nco;nrf-1 = 0
+assume nrf;nrf = 0
+assume nrf;nco = 0
+assume nrf;nrf-1 <= id
+
+assert eco1 <= eco2

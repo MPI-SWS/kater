@@ -1,0 +1,15 @@
+let sync = [R|W]; po; [F;SC]; po; [R|W]
+let lwsync = po; [F]; po
+let fence = sync | [R]; lwsync; [W|R] | [R|W]; lwsync; [W]
+
+let ppo = [R]; po-loc; [W]
+let hb = // ppo |
+			       fence | rfe // assume empty ppo
+
+let prop1 = [W]; rfe?; fence; hb*; [W]
+let prop2 = (mo | fr)?; rfe?; (fence;hb*)?; sync; hb*
+let prop = prop1 | prop2
+
+let obs = fr; prop; hb*
+
+let ar = obs | (mo | prop)+

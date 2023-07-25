@@ -1,0 +1,85 @@
+// ---------------------------------------------------------------------
+// Definition of standard relations
+// ---------------------------------------------------------------------
+
+// Extended coherence order
+let eco = (rf | mo | fr)+
+
+// Same location
+let loc = loc-overlap ^=
+
+// ---------------------------------------------------------------------
+// RC11 Happens-before
+// ---------------------------------------------------------------------
+
+let ppo = po
+
+// Optimized calculation of synchronizes-with
+// Save the view of write messages
+
+let relseq = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)*
+let sw_to_r = relseq ; rf ; [ACQ]
+let sw_to_f = relseq ; rf ; po ; [F|TJ|TB] ; [ACQ]
+let sw = sw_to_r | sw_to_f
+let asw = tc | tj
+
+assert sw = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F|TJ|TB])? ; [ACQ]
+
+// Optimized calculation of happens-before.
+// Save the part of `hb` that does not finish with a reads-from edge
+
+view hb_stable = (po-imm | (sw_to_r | asw) ; po-imm | sw_to_f)+
+let hb = (hb_stable | hb_stable? ; (sw_to_r | asw))
+
+assert hb = (po | sw | asw)+
+
+// ---------------------------------------------------------------------
+// RC11 Consistency axioms
+// ---------------------------------------------------------------------
+
+// No load buffering
+// acyclic (po | rf)
+
+// Coherence : Optimize the checking of irreflexive (hb ; eco)
+coherence (hb_stable)
+
+// RMW atomicity
+// check  mo-imm ; [UW] <= rf ; po-imm
+
+
+// Sequential consistency order
+let FSC = [F] ; [SC]
+let fhb = [F] ; hb
+let hbf = hb ; [F]
+let scb = po | rf | mo | fr
+let psc = [SC] ; po ; hb ; po ; [SC]
+        | [SC] ; fhb? ; scb ; hbf? ; [SC]
+        | FSC ; hb ; FSC
+        | FSC ; hb ; eco ; hb ; FSC
+        | SC ; po ; SC
+acyclic psc
+
+// ---------------------------------------------------------------------
+// RC11 error detection
+// ---------------------------------------------------------------------
+
+let ww_conflict = [W] ; loc-overlap ; [W] // co
+let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W] //co?;rf | fr
+let conflicting = ww_conflict | wr_conflict
+let na_conflict = [NA] ; conflicting | conflicting ; [NA]
+
+// GenMC needs to handle the no-alloc case (access validity)
+error VE_UninitializedMem unless  [IR] = 0 // necessary for the case where there is no initializing write; fixme as IR & Dynamic?
+// perhaps [W]; loc-overlap; [DynR] <= hb_stable is better because it can be checked only once?
+
+// can all these be performed at event addition?
+
+error VE_AccessNonMalloc unless  alloc <= hb_stable
+error VE_DoubleFree      unless  [Free|HpRetire] ; loc-overlap ; [Free|HpRetire] = 0
+error VE_AccessFreed     unless  loc-overlap ; [Free] <= hb_stable
+error VE_AccessFreed     unless  [Free] ; loc-overlap = 0 // new rels: free; alloc
+// error VE_AccessFreed     unless  [NotHpProtected] ; loc-overlap ; [HpRetire] <= hb_stable
+// error VE_AccessFreed     unless  [HpRetire] ; loc-overlap ; [NotHpProtected] = 0
+
+error VE_RaceNotAtomic     unless  na_conflict <= hb_stable
+// warning WWRace          unless  ww_conflict <= hb_stable

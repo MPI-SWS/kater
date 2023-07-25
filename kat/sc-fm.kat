@@ -1,0 +1,5 @@
+declare to
+
+let hb = (po | rf)+
+
+let sc = mo | hb;fr | [F|W];hb;[F|W]

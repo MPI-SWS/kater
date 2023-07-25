@@ -1,0 +1,569 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2023-07-25 Tue 13:28 -->
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>@@html:&lt;font style="font-variant: small-caps"&gt;Kater&lt;/font&gt;@@@@latex:\textsc{Kater}\xspace@@: Automating Weak Memory Model Metatheory and Consistency Checking</title>
+<meta name="generator" content="Org Mode" />
+<style>
+  #content { max-width: 60em; margin: auto; }
+  .title  { text-align: center;
+             margin-bottom: .2em; }
+  .subtitle { text-align: center;
+              font-size: medium;
+              font-weight: bold;
+              margin-top:0; }
+  .todo   { font-family: monospace; color: red; }
+  .done   { font-family: monospace; color: green; }
+  .priority { font-family: monospace; color: orange; }
+  .tag    { background-color: #eee; font-family: monospace;
+            padding: 2px; font-size: 80%; font-weight: normal; }
+  .timestamp { color: #bebebe; }
+  .timestamp-kwd { color: #5f9ea0; }
+  .org-right  { margin-left: auto; margin-right: 0px;  text-align: right; }
+  .org-left   { margin-left: 0px;  margin-right: auto; text-align: left; }
+  .org-center { margin-left: auto; margin-right: auto; text-align: center; }
+  .underline { text-decoration: underline; }
+  #postamble p, #preamble p { font-size: 90%; margin: .2em; }
+  p.verse { margin-left: 3%; }
+  pre {
+    border: 1px solid #e6e6e6;
+    border-radius: 3px;
+    background-color: #f2f2f2;
+    padding: 8pt;
+    font-family: monospace;
+    overflow: auto;
+    margin: 1.2em;
+  }
+  pre.src {
+    position: relative;
+    overflow: auto;
+  }
+  pre.src:before {
+    display: none;
+    position: absolute;
+    top: -8px;
+    right: 12px;
+    padding: 3px;
+    color: #555;
+    background-color: #f2f2f299;
+  }
+  pre.src:hover:before { display: inline; margin-top: 14px;}
+  /* Languages per Org manual */
+  pre.src-asymptote:before { content: 'Asymptote'; }
+  pre.src-awk:before { content: 'Awk'; }
+  pre.src-authinfo::before { content: 'Authinfo'; }
+  pre.src-C:before { content: 'C'; }
+  /* pre.src-C++ doesn't work in CSS */
+  pre.src-clojure:before { content: 'Clojure'; }
+  pre.src-css:before { content: 'CSS'; }
+  pre.src-D:before { content: 'D'; }
+  pre.src-ditaa:before { content: 'ditaa'; }
+  pre.src-dot:before { content: 'Graphviz'; }
+  pre.src-calc:before { content: 'Emacs Calc'; }
+  pre.src-emacs-lisp:before { content: 'Emacs Lisp'; }
+  pre.src-fortran:before { content: 'Fortran'; }
+  pre.src-gnuplot:before { content: 'gnuplot'; }
+  pre.src-haskell:before { content: 'Haskell'; }
+  pre.src-hledger:before { content: 'hledger'; }
+  pre.src-java:before { content: 'Java'; }
+  pre.src-js:before { content: 'Javascript'; }
+  pre.src-latex:before { content: 'LaTeX'; }
+  pre.src-ledger:before { content: 'Ledger'; }
+  pre.src-lisp:before { content: 'Lisp'; }
+  pre.src-lilypond:before { content: 'Lilypond'; }
+  pre.src-lua:before { content: 'Lua'; }
+  pre.src-matlab:before { content: 'MATLAB'; }
+  pre.src-mscgen:before { content: 'Mscgen'; }
+  pre.src-ocaml:before { content: 'Objective Caml'; }
+  pre.src-octave:before { content: 'Octave'; }
+  pre.src-org:before { content: 'Org mode'; }
+  pre.src-oz:before { content: 'OZ'; }
+  pre.src-plantuml:before { content: 'Plantuml'; }
+  pre.src-processing:before { content: 'Processing.js'; }
+  pre.src-python:before { content: 'Python'; }
+  pre.src-R:before { content: 'R'; }
+  pre.src-ruby:before { content: 'Ruby'; }
+  pre.src-sass:before { content: 'Sass'; }
+  pre.src-scheme:before { content: 'Scheme'; }
+  pre.src-screen:before { content: 'Gnu Screen'; }
+  pre.src-sed:before { content: 'Sed'; }
+  pre.src-sh:before { content: 'shell'; }
+  pre.src-sql:before { content: 'SQL'; }
+  pre.src-sqlite:before { content: 'SQLite'; }
+  /* additional languages in org.el's org-babel-load-languages alist */
+  pre.src-forth:before { content: 'Forth'; }
+  pre.src-io:before { content: 'IO'; }
+  pre.src-J:before { content: 'J'; }
+  pre.src-makefile:before { content: 'Makefile'; }
+  pre.src-maxima:before { content: 'Maxima'; }
+  pre.src-perl:before { content: 'Perl'; }
+  pre.src-picolisp:before { content: 'Pico Lisp'; }
+  pre.src-scala:before { content: 'Scala'; }
+  pre.src-shell:before { content: 'Shell Script'; }
+  pre.src-ebnf2ps:before { content: 'ebfn2ps'; }
+  /* additional language identifiers per "defun org-babel-execute"
+       in ob-*.el */
+  pre.src-cpp:before  { content: 'C++'; }
+  pre.src-abc:before  { content: 'ABC'; }
+  pre.src-coq:before  { content: 'Coq'; }
+  pre.src-groovy:before  { content: 'Groovy'; }
+  /* additional language identifiers from org-babel-shell-names in
+     ob-shell.el: ob-shell is the only babel language using a lambda to put
+     the execution function name together. */
+  pre.src-bash:before  { content: 'bash'; }
+  pre.src-csh:before  { content: 'csh'; }
+  pre.src-ash:before  { content: 'ash'; }
+  pre.src-dash:before  { content: 'dash'; }
+  pre.src-ksh:before  { content: 'ksh'; }
+  pre.src-mksh:before  { content: 'mksh'; }
+  pre.src-posh:before  { content: 'posh'; }
+  /* Additional Emacs modes also supported by the LaTeX listings package */
+  pre.src-ada:before { content: 'Ada'; }
+  pre.src-asm:before { content: 'Assembler'; }
+  pre.src-caml:before { content: 'Caml'; }
+  pre.src-delphi:before { content: 'Delphi'; }
+  pre.src-html:before { content: 'HTML'; }
+  pre.src-idl:before { content: 'IDL'; }
+  pre.src-mercury:before { content: 'Mercury'; }
+  pre.src-metapost:before { content: 'MetaPost'; }
+  pre.src-modula-2:before { content: 'Modula-2'; }
+  pre.src-pascal:before { content: 'Pascal'; }
+  pre.src-ps:before { content: 'PostScript'; }
+  pre.src-prolog:before { content: 'Prolog'; }
+  pre.src-simula:before { content: 'Simula'; }
+  pre.src-tcl:before { content: 'tcl'; }
+  pre.src-tex:before { content: 'TeX'; }
+  pre.src-plain-tex:before { content: 'Plain TeX'; }
+  pre.src-verilog:before { content: 'Verilog'; }
+  pre.src-vhdl:before { content: 'VHDL'; }
+  pre.src-xml:before { content: 'XML'; }
+  pre.src-nxml:before { content: 'XML'; }
+  /* add a generic configuration mode; LaTeX export needs an additional
+     (add-to-list 'org-latex-listings-langs '(conf " ")) in .emacs */
+  pre.src-conf:before { content: 'Configuration File'; }
+
+  table { border-collapse:collapse; }
+  caption.t-above { caption-side: top; }
+  caption.t-bottom { caption-side: bottom; }
+  td, th { vertical-align:top;  }
+  th.org-right  { text-align: center;  }
+  th.org-left   { text-align: center;   }
+  th.org-center { text-align: center; }
+  td.org-right  { text-align: right;  }
+  td.org-left   { text-align: left;   }
+  td.org-center { text-align: center; }
+  dt { font-weight: bold; }
+  .footpara { display: inline; }
+  .footdef  { margin-bottom: 1em; }
+  .figure { padding: 1em; }
+  .figure p { text-align: center; }
+  .equation-container {
+    display: table;
+    text-align: center;
+    width: 100%;
+  }
+  .equation {
+    vertical-align: middle;
+  }
+  .equation-label {
+    display: table-cell;
+    text-align: right;
+    vertical-align: middle;
+  }
+  .inlinetask {
+    padding: 10px;
+    border: 2px solid gray;
+    margin: 10px;
+    background: #ffffcc;
+  }
+  #org-div-home-and-up
+   { text-align: right; font-size: 70%; white-space: nowrap; }
+  textarea { overflow-x: auto; }
+  .linenr { font-size: smaller }
+  .code-highlighted { background-color: #ffff00; }
+  .org-info-js_info-navigation { border-style: none; }
+  #org-info-js_console-label
+    { font-size: 10px; font-weight: bold; white-space: nowrap; }
+  .org-info-js_search-highlight
+    { background-color: #ffff00; color: #000000; font-weight: bold; }
+  .org-svg { }
+</style>
+</head>
+<body>
+<div id="content" class="content">
+<h1 class="title"><font style="font-variant: small-caps">Kater</font>: Automating Weak Memory Model Metatheory and Consistency Checking</h1>
+<div id="table-of-contents" role="doc-toc">
+<h2>Table of Contents</h2>
+<div id="text-table-of-contents" role="doc-toc">
+<ul>
+<li><a href="#org76e2113">1. Introduction </a></li>
+<li><a href="#org62ebe49">2. Usage </a>
+<ul>
+<li><a href="#org506ea15">2.1. Syntax </a></li>
+<li><a href="#orgdaf603d">2.2. Proof Mode </a>
+<ul>
+<li><a href="#org9ed177a">2.2.1. Complete Fragment</a></li>
+<li><a href="#org433b79d">2.2.2. Incomplete Fragment</a></li>
+<li><a href="#orgd002bfd">2.2.3. Custom Relations</a></li>
+</ul>
+</li>
+<li><a href="#orgedd8aec">2.3. Export Mode </a></li>
+</ul>
+</li>
+<li><a href="#org1d11621">3. Contact </a></li>
+<li><a href="#orgb8f819b">4. Bibliography </a></li>
+</ul>
+</div>
+</div>
+
+
+<div id="outline-container-org76e2113" class="outline-2">
+<h2 id="org76e2113"><span class="section-number-2">1.</span> Introduction <a id="orga423528"></a></h2>
+<div class="outline-text-2" id="text-1">
+<p>
+<font style="font-variant: small-caps">Kater</font> is a tool that can automatically prove metatheoretic
+queries about (weak) memory consistency models (e.g., compilation
+correctness, program transformations), and also produce consistency
+checking routines for stateless model checkers (currently only
+<font style="font-variant: small-caps">GenMC</font> (<a href="#citeproc_bib_item_1">Kokologiannakis and Vafeiadis 2021</a>) is supported).
+The underlying theory of <font style="font-variant: small-caps">Kater</font> is described in a POPL 2023
+paper (<a href="#citeproc_bib_item_2">Kokologiannakis, Lahav, and Vafeiadis 2023</a>).
+</p>
+</div>
+</div>
+
+
+<div id="outline-container-org62ebe49" class="outline-2">
+<h2 id="org62ebe49"><span class="section-number-2">2.</span> Usage <a id="org0f41979"></a></h2>
+<div class="outline-text-2" id="text-2">
+<p>
+An invocation of <font style="font-variant: small-caps">Kater</font> resembles the following:
+</p>
+
+<div class="org-src-container">
+<pre class="src src-sh">kater [OPTIONS] file
+</pre>
+</div>
+<p>
+where <code>OPTIONS</code> include options that can be passed to <font style="font-variant: small-caps">Kater</font> (use
+<code>--help</code> for a full list), and <code>file</code> is a file in the KAT language
+(see <a href="#org32527c9">2.1</a> for more details).
+</p>
+
+<p>
+<font style="font-variant: small-caps">Kater</font> can operate in two modes: <i>proof mode</i>, where it will
+try to prove all metatheoretic queries of the input, and <i>export mode</i>
+(invoked with <code>-e</code>), which will export consistency checking code.
+</p>
+</div>
+
+<div id="outline-container-org506ea15" class="outline-3">
+<h3 id="org506ea15"><span class="section-number-3">2.1.</span> Syntax <a id="org32527c9"></a></h3>
+<div class="outline-text-3" id="text-2-1">
+<p>
+A KAT file is a series of <code>declare</code>, <code>declare-loc</code>, <code>let</code>, <code>assert</code>
+and <code>assume</code> statements (see <a href="#orga0c7307">2.2</a> for examples).
+<font style="font-variant: small-caps">Kater</font> also provides syntax relevant to code exporting, but this
+code is unstable and subject to change, so we do not provide more
+details here (see <a href="#org2156668">2.3</a> for a glimpse).
+</p>
+
+<p>
+<code>declare r</code> declares a new relation <code>r</code>, <code>declare-loc r</code> declares a
+new relation <code>r</code> and its per-location counterpart <code>r-loc</code>, <code>let</code> is
+used to define a derived relation, <code>assert</code> to declare a metatheoretic
+constraint to be checked by <font style="font-variant: small-caps">Kater</font>, and <code>assume</code> to declare an
+assumption to be taken into account when proving the file's <code>assert</code>​s.
+</p>
+
+<p>
+To facilitate proofs, <font style="font-variant: small-caps">Kater</font> has a builtin theory with relations
+and predicates commonly used in weak memory literature: <code>po, po-loc,
+mo, rf, fr, detour, ctrl, addr, data</code> (as well as their <code>-imm</code>
+counterparts, where applicable), and <code>R, W, F, UR, UW, NA, RLX, ACQ,
+REL, SC, True, False</code>.  Users are encouraged to use the builtin theory
+if possible, and not re-declare such primitive relations.
+</p>
+
+<p>
+<font style="font-variant: small-caps">Kater</font> also knows the following properties:
+</p>
+<ul class="org-ul">
+<li>Disjoint tests: e.g., <code>R &amp; W = 0</code></li>
+<li>Domains and ranges: e.g., <code>rf = rfe | rfi</code></li>
+<li>Transitivity: e.g., <code>po ; po &lt;​= po</code></li>
+<li>From-read properties: <code>rf ; fr &lt;​= mo</code> and <code>fr ; mo+ &lt;​= fr</code></li>
+</ul>
+
+<p>
+Users can define additional properties using <code>assume</code> statements.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgdaf603d" class="outline-3">
+<h3 id="orgdaf603d"><span class="section-number-3">2.2.</span> Proof Mode <a id="orga0c7307"></a></h3>
+<div class="outline-text-3" id="text-2-2">
+</div>
+<div id="outline-container-org9ed177a" class="outline-4">
+<h4 id="org9ed177a"><span class="section-number-4">2.2.1.</span> Complete Fragment</h4>
+<div class="outline-text-4" id="text-2-2-1">
+<p>
+We begin with some examples that fall within <font style="font-variant: small-caps">Kater</font>'s complete
+fragment to demonstrate matching endpoints and rotations.
+</p>
+
+<p>
+The code below proves equivalence between two versions of the
+Release-Acquire (RA) model.
+</p>
+<div class="org-src-container">
+<pre class="src src-sh"><span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">hb</span> = ([R|W];po;[R|W] | rf)+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">ra</span> = hb;(mo|fr)?
+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">hb2</span> = ([R|W];po;[W] | [R];po;[W|R] | rfe)+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">ra2</span> = hb2;(mo|fr)? | po;fr
+
+assert ra &amp; id &lt;= [R|W];ra2;[R|W] &amp; id
+</pre>
+</div>
+<p>
+The construct <code>id &amp; r</code> is used to enforce that the endpoints are the
+same in the examined paths of <code>r</code>. <code>ra2</code> is restricted to <code>[R|W]</code>
+because <font style="font-variant: small-caps">Kater</font> cannot otherwise know that there are no other
+types of events (in which case the stated equivalence does not hold if
+we do not appropriately change the definitions of <code>hb,hb2</code>).
+</p>
+
+<p>
+Similarly, the code below proves equivalence between two other
+versions of RA.
+</p>
+<div class="org-src-container">
+<pre class="src src-sh"><span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">hb</span> = (po | rf)+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">ra1</span> = (hb;fr | hb;mo | hb)
+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">ra3</span> = (mo | fr)?;hb
+
+assert [R|W];ra1;[R|W] &amp; id &lt;= rot ra3
+assert ra3 &amp; id &lt;= rot ra1
+</pre>
+</div>
+<p>
+<code>rot</code> is used to consider the rotations of the RHS.
+</p>
+
+<p>
+In both examples above, no assumption was necessary to prove
+the desired result, as <font style="font-variant: small-caps">Kater</font> has all the necessary information
+in its builtin theory.
+</p>
+</div>
+</div>
+
+<div id="outline-container-org433b79d" class="outline-4">
+<h4 id="org433b79d"><span class="section-number-4">2.2.2.</span> Incomplete Fragment</h4>
+<div class="outline-text-4" id="text-2-2-2">
+<p>
+<font style="font-variant: small-caps">Kater</font> treats generic non-emptiness assumptions like <code>a &lt;​= b</code> in
+a heuristic fashion<sup><a id="fnr.1" class="footref" href="#fn.1" role="doc-backlink">1</a></sup>.  Such
+assumptions are particularly useful in compilation schemes, like the
+one below from RC11 to TSO.
+</p>
+<div class="org-src-container">
+<pre class="src src-sh">// file: tso.kat
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">ppo</span> = ([R]; po | po ; [F] | [UW|F] ; po | po ; [W])+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">tso</span> = (ppo | rfe | mo | fr)
+
+// file: rc11.kat
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">eco</span> = (rf | mo | fr)+
+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">sw</span> = [REL] ; ([F] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F])? ; [ACQ]
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">hb</span> = (po | sw)+
+
+<span style="color: #6c71c4;">let</span> SC<span style="color: #2aa198;">' = ([F] | [R] | [W]) ; SC</span>
+<span style="color: #2aa198;">let FSC = [F] ; [SC]</span>
+<span style="color: #2aa198;">let fhb = [F] ; hb</span>
+<span style="color: #2aa198;">let hbf = hb ; [F]</span>
+<span style="color: #2aa198;">let scb = po | rf | mo | fr</span>
+<span style="color: #2aa198;">let psc = [SC'</span>] ; po ; hb ; po ; [SC<span style="color: #2aa198;">']</span>
+<span style="color: #2aa198;">        | [SC'</span>] ; fhb? ; scb ; hbf? ; [SC<span style="color: #2aa198;">']</span>
+<span style="color: #2aa198;">        | FSC ; hb ; FSC</span>
+<span style="color: #2aa198;">        | FSC ; hb ; eco ; hb ; FSC</span>
+<span style="color: #2aa198;">        | SC'</span> ; po ; SC<span style="color: #2aa198;">'</span>
+
+<span style="color: #2aa198;">let psc_strong = ([SC'</span>] | [F];[SC]; hb?); (hb | eco); ([SC<span style="color: #2aa198;">'] | hb?; [F];[SC])</span>
+
+<span style="color: #2aa198;">let ar = psc+ |</span>
+<span style="color: #2aa198;">         hb;eco |</span>
+<span style="color: #2aa198;">        (po | rf)+</span>
+
+<span style="color: #2aa198;">// file: compilation.kat</span>
+<span style="color: #2aa198;">include "./tso.kat"</span>
+<span style="color: #2aa198;">include "./rc11.kat"</span>
+
+<span style="color: #2aa198;">assume [W];po;[R] &lt;= [W];po;[F];po;[R]</span>
+<span style="color: #2aa198;">assert rc11::psc+ &lt;= tso::tso+</span>
+</pre>
+</div>
+<p>
+The compilation scheme is provided as an assumption, and <font style="font-variant: small-caps">Kater</font>
+produces a counterexample if it is omitted.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgd002bfd" class="outline-4">
+<h4 id="orgd002bfd"><span class="section-number-4">2.2.3.</span> Custom Relations</h4>
+<div class="outline-text-4" id="text-2-2-3">
+<p>
+Users can declare additional relations using the <code>declare r</code>
+and <code>declare-loc r</code> commands. (The latter also defines <code>r-loc</code>
+and equips <font style="font-variant: small-caps">Kater</font> with the knowledge that <code>r-loc &lt;​= r</code>.)
+</p>
+
+<p>
+An example where <code>rf</code> is re-defined as a user-declared relation can be
+seen below.
+</p>
+<div class="org-src-container">
+<pre class="src src-sh"><span style="color: #6c71c4;">declare</span> rf
+<span style="color: #6c71c4;">declare</span> rf-1
+<span style="color: #6c71c4;">declare</span> co
+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">nfr</span> = rf-1; co
+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">eco1</span> = (rf | co | nfr)+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">eco2</span> = rf | (co|nfr);rf?
+
+assume co;co &lt;= co
+assume co;rf-1 = 0
+assume rf;<span style="color: #6c71c4;">rf</span> = 0
+assume rf;<span style="color: #6c71c4;">co</span> = 0
+assume rf;rf-1 &lt;= id
+
+assert eco1 &lt;= eco2
+</pre>
+</div>
+<p>
+<font style="font-variant: small-caps">Kater</font> required quite a few assumptions in order to prove the
+desired result. Using the builtin theory in this example eliminates
+the need for such assumptions.
+</p>
+</div>
+</div>
+</div>
+
+<div id="outline-container-orgedd8aec" class="outline-3">
+<h3 id="orgedd8aec"><span class="section-number-3">2.3.</span> Export Mode <a id="org2156668"></a></h3>
+<div class="outline-text-3" id="text-2-3">
+<p>
+The code below produces <font style="font-variant: small-caps">GenMC</font> consistency checking code for RC11
+(<a href="#citeproc_bib_item_3">Lahav et al. 2017</a>).
+</p>
+
+<div class="org-src-container">
+<pre class="src src-sh">// Extended coherence order
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">eco</span> = (rf | mo | fr)+
+
+// Export mode needs to define a PPO relation
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">ppo</span> = po
+
+// Extend SW with thread creation
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">relseq</span> = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)*
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">sw_to_r</span> = relseq ; rf ; [ACQ]
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">sw_to_f</span> = relseq ; rf ; po ; [F|TJ|TB] ; [ACQ]
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">sw</span> = sw_to_r | sw_to_f
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">asw</span> = tc | tj
+
+assert <span style="color: #6c71c4;">sw</span> = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F|TJ|TB])? ; [ACQ]
+
+// An hb_stable view needs to be provided for coherence
+view <span style="color: #6c71c4;">hb_stable</span> = (po-imm | (sw_to_r | asw) ; po-imm | sw_to_f)+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">hb</span> = (hb_stable | hb_stable? ; (sw_to_r | asw))
+
+assert <span style="color: #6c71c4;">hb</span> = (po | sw | asw)+
+
+// Coherence : Optimize the checking of irreflexive (hb ; eco)
+<span style="color: #b58900;">coherence</span> (hb_stable)
+
+// No OOTA + RMW atomicity are taken care of by GenMC
+// acyclic (po | rf)
+
+// Sequential consistency order
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">FSC</span> = [F] ; [SC]
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">fhb</span> = [F] ; hb
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">hbf</span> = hb ; [F]
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">scb</span> = po | rf | mo | fr
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">psc</span> = [SC] ; po ; hb ; po ; [SC]
+        | [SC] ; fhb? ; scb ; hbf? ; [SC]
+        | FSC ; hb ; FSC
+        | FSC ; hb ; eco ; hb ; FSC
+        | SC ; po ; SC
+acyclic psc
+
+// ---------------------------------------------------------------------
+// RC11 error detection example
+// ---------------------------------------------------------------------
+
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">ww_conflict</span> = [W] ; loc-overlap ; [W]
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">wr_conflict</span> = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">conflicting</span> = ww_conflict | wr_conflict
+<span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">na_conflict</span> = [NA] ; conflicting | conflicting ; [NA]
+
+error VE_AccessNonMalloc unless  alloc &lt;= hb_stable
+error VE_DoubleFree      unless  [Free] ; loc-overlap ; [Free] = 0
+error VE_AccessFreed     unless  loc-overlap ; [Free] &lt;= hb_stable
+error VE_AccessFreed     unless  [Free] ; loc-overlap = 0
+
+error VE_RaceNotAtomic     unless  na_conflict &lt;= hb_stable
+</pre>
+</div>
+</div>
+</div>
+</div>
+
+<div id="outline-container-org1d11621" class="outline-2">
+<h2 id="org1d11621"><span class="section-number-2">3.</span> Contact <a id="orgcca5e4d"></a></h2>
+<div class="outline-text-2" id="text-3">
+<p>
+For feedback, questions and bug reports please send an e-mail to
+<a href="mailto:michalis@mpi-sws.org">michalis@mpi-sws.org</a>.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgb8f819b" class="outline-2">
+<h2 id="orgb8f819b"><span class="section-number-2">4.</span> Bibliography <a id="orged838eb"></a></h2>
+<div class="outline-text-2" id="text-4">
+<p>
+
+</p>
+
+<style>.csl-entry{text-indent: -1.5em; margin-left: 1.5em;}</style><div class="csl-bib-body">
+  <div class="csl-entry"><a id="citeproc_bib_item_1"></a>Kokologiannakis, Michalis, and Viktor Vafeiadis. 2021. “GenMC: A Model Checker for Weak Memory Models.” In <i>CAV 2021</i>, edited by Alexandra Silva and K. Rustan M. Leino, 12759:427–40. LNCS. Springer. doi:<a href="https://doi.org/10.1007/978-3-030-81685-8_20">10.1007/978-3-030-81685-8_20</a>.</div>
+  <div class="csl-entry"><a id="citeproc_bib_item_2"></a>Kokologiannakis, Michalis, Ori Lahav, and Viktor Vafeiadis. 2023. “Kater: Automating Weak Memory Model Metatheory and Consistency Checking.” <i>Proc. ACM Program. Lang.</i> 7 (POPL). New York, NY, USA: ACM. doi:<a href="https://doi.org/10.1145/3571212">10.1145/3571212</a>.</div>
+  <div class="csl-entry"><a id="citeproc_bib_item_3"></a>Lahav, Ori, Viktor Vafeiadis, Jeehoon Kang, Chung-Kil Hur, and Derek Dreyer. 2017. “Repairing Sequential Consistency in C/C++11.” In <i>PLDI 2017</i>, 618–32. Barcelona, Spain: ACM. doi:<a href="https://doi.org/10.1145/3062341.3062352">10.1145/3062341.3062352</a>.</div>
+</div>
+</div>
+</div>
+<div id="footnotes">
+<h2 class="footnotes">Footnotes: </h2>
+<div id="text-footnotes">
+
+<div class="footdef"><sup><a id="fn.1" class="footnum" href="#fnr.1" role="doc-backlink">1</a></sup> <div class="footpara" role="doc-footnote"><p class="footpara">Excluding assumptions of the form
+<code>r;r &lt;​= r</code> or <code>r &lt;​= id</code> which maintain completeness.</p></div></div>
+
+
+</div>
+</div></div>
+<div id="postamble" class="status">
+<p class="date">Created: 2023-07-25 Tue 13:28</p>
+<p class="validation"><a href="https://validator.w3.org/check?uri=referer">Validate</a></p>
+</div>
+</body>
+</html>

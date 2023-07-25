@@ -1,0 +1,38 @@
+//-------------------------------------------------
+// TSO relations
+//-------------------------------------------------
+
+let ppo = ([R]; po | po ; [F] | [UW|F] ; po | po ; [W])+
+let tso = (ppo | rfe | mo | fr)+
+
+//-------------------------------------------------
+// C11 relations
+//-------------------------------------------------
+
+// Extended coherence order
+let eco = (rf | mo | fr)+
+
+// Happens-before
+let Fpo = [F] ; po
+let poF = po ; [F]
+let relseq = (rf ; rmw)*
+let sw = [REL] ; Fpo? ; relseq ; rf ; poF? ; [ACQ]
+let hb = (po | sw)+
+
+// Sequential consistency order
+let SC' = [R|W|F] ; [SC]
+let FSC = [F] ; [SC]
+let Fhb = [F] ; hb
+let hbF = hb ; [F]
+let scb = po | rf | mo | fr
+let psc = [SC'] ; po ; hb ; po ; [SC']
+        | [SC'] ; Fhb? ; scb ; hbF? ; [SC']
+        | [FSC] ; hb ; [FSC]
+        | [FSC] ; hb ; eco ; hb ; [FSC]
+        | [SC'] ; po ; [SC']
+
+//-------------------------------------------------
+// Compilation correctness
+//-------------------------------------------------
+// assume [W];po;[R] <= po;[F];po
+assert psc+ <= tso

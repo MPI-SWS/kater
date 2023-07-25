@@ -1,0 +1,120 @@
+// Standard preamble: various combinations that are invalid
+
+assume [F] ; mo-imm = 0
+assume [F] ; rf = 0
+assume [F] ; rfi = 0
+assume [F] ; rfe = 0
+assume mo-imm ; [F] = 0
+assume rf ; [F] = 0
+assume rfe ; [F] = 0
+assume rfi ; [F] = 0
+assume rf ; [REL] = 0
+assume rfe ; [REL] = 0
+assume rfi ; [REL] = 0
+assume [REL] ; rf = 0
+assume [REL] ; rfi = 0
+assume [REL] ; rfe = 0
+
+
+// ---------------------------------------------------------------------
+// Definition of standard relations
+// ---------------------------------------------------------------------
+
+// Program order
+let po = po-imm+
+let po-loc = po-loc-imm+
+
+// Modification order
+let mo = mo-imm+
+
+// From-reads
+let fr = fr-imm; mo*
+
+// Extended coherence order
+let eco = (rf | mo | fr)+
+
+// Atomic RMW instruction
+let rmw = [UR]; po-imm ; [UW]
+
+// Same location
+let loc = loc-overlap ^=
+
+// Dependencies
+let ctrl = ctrl-imm ; po-imm*
+let addr = addr-imm+
+let data = data-imm+
+
+// ---------------------------------------------------------------------
+// LKMM definitions
+// ---------------------------------------------------------------------
+
+let acq-po = [ACQ] ; po
+let po-rel = po ; [REL]
+
+// let rmb = [R \ Noreturn] ; po ; [Frmb] ; po ; [R \ Noreturn]
+let rmb = [R] ; po ; [Frmb] ; po ; [R]
+let wmb = [W] ; po ; [Fwmb] ; po ; [W]
+
+let strong-fence =
+         // po ; [Fmb] ; po
+         po ; [Fba] ; po ; rmw ; po?
+       | po? ; rmw ; po ; [Faa] ; po
+       // | po? ; [LW] ; po ; [F-After-spinlock] ; po
+       | po ; [UL] ; po ; [LR] ; po ; [Faul] ; po
+       | po? ; [SC] ; po
+       | po ; [SC] ; po?
+//       | po ; [Sync-rcu | Sync-srcu] ; po?
+
+let strong-sync =
+         strong-fence
+       | po ; [UL] ; mo? ; rf ; [LR] ; po ; [Faul] ; po
+
+let fence = strong-fence | po-rel | acq-po | wmb | rmb
+
+save[ppo] ppo =
+         addr ; wmb?
+       | data
+       | (ctrl | po-loc) ; [W]
+       | ((addr | data) ; [Marked] ; rfi)
+       | fence
+       | po ; [UL] ; po ; [LR] ; po
+
+let po-unlock-lock-po = po ; [UL] ; (po|rf) ; [LR] ; po
+
+let cumul-fence = [Marked] ; (rfe? ; po-rel | wmb | po-unlock-lock-po) ; [Marked]
+let prop = [Marked] ; (moe | fre) ; cumul-fence* ; [Marked] ; rfe? ; [Marked]
+let hb = [Marked] ; (ppo | rfe | (fre | moe) ; rfe | prop ; strong-sync) ; [Marked]
+//let hb = [Marked] ; (ppo | rfe | (prop & int) | prop ; strong-sync) ; [Marked]
+
+let hb-orig = [Marked] ; (ppo | rfe | (fre | moe) ; rfe) ; [Marked]
+
+let pb-orig = prop ; strong-sync ; hb-orig*
+
+// prove: irreflexive hb+ <-> irreflexive (hb-orig+ | pb-orig+)
+// assert rot hb = rot (hb-orig+ | pb-orig+)
+
+let hb-base = [Marked] ; (ppo | rfe) ; [Marked]
+let overwrite = [Marked] ; (moe | fre) ; [Marked]
+
+let prop2 = (rfe? ; po-rel | wmb) ; [Marked] ; hb-base*
+
+let hb-alt =
+         hb-base
+       | (overwrite ; prop2) & int
+       | (overwrite ; prop2 ; strong-sync) ; [Marked]
+
+// ---------------------------------------------------------------------
+// Consistency axioms
+// ---------------------------------------------------------------------
+
+// Coherence
+coherence po
+
+// RMW atomicity
+check  mo-imm ; [UW] <= rf ; po-imm
+
+// Global ordering constraint
+acyclic hb
+
+// Work-around prop&int
+acyclic prop ; ppo*

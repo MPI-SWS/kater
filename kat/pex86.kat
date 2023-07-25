@@ -1,0 +1,14 @@
+let DW = [W]; [D]
+let DR = [R]; [D]
+
+// FIXME: Faul is a hack to make CLF compose with F/NREC and be able to take more ppo/tso steps
+
+save[ppo] ppo = ([R|F|UW]; po | po; [F|W] | [W|Faul]; po; [Faul] | [Faul]; po; [W|Faul])+
+
+let tso = (ppo | rfe | mo | fr)
+
+acyclic tso
+
+let pb = ([DW]; mo) | ([DW]; po-loc; [CLF]; po? | [Faul]; ([NREC];tso;[NREC])+; [DW|Faul])
+
+recovery (pb)

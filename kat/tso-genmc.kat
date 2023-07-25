@@ -1,0 +1,5 @@
+save[ppo] ppo = ([R|F|UW]; po | po ; [W|F|SC])+
+
+let tso = (ppo | rfe | mo | fr)
+
+acyclic tso

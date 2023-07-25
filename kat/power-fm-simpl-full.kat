@@ -1,0 +1,20 @@
+let sync = [R|W]; po; [F;SC]; po; [R|W] | [R|W]; po; [SC;(R|W)] // last cl
+let lwsync = po; [F]; po | [ACQ;R]; po | po;[REL;W];po?;[W] // last 2cl
+let fence = sync | [R]; lwsync; [W|R] | [R|W]; lwsync; [W]
+
+let ppo = [R]; (rfi | rmw)+; [R|W]
+let hb = ppo | fence | rfe // assume empty ppo
+
+let prop1 = rfe?; fence; hb*
+let prop2 = fr?; rfe?; (fence; hb*)?; sync; hb*
+let rprop2 = rfe?; (fence; hb*)?; sync; hb*; fr; rfe?
+let rprop2a = [F;SC]; po; hb*; fr; rfe?; (fence; hb*)?; po;[F;SC]
+let prop = [W];prop1;[W] | prop2 | rprop2 | rprop2a | [F;SC]; po; hb*; [W|R]
+| [W|R]; rfe?; po; [F;SC]
+
+let obs = fr; prop1; hb*
+let robs = prop1; hb*;fr | hb*;fr;prop1
+
+let eco = (rf | mo | fr)+
+
+let ar = obs | (mo | fr | rfe | prop)+ | hb+ | eco*;po?;eco* | (mo|rfe|prop1)+ | robs

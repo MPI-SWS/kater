@@ -1,0 +1,9 @@
+let hb = (po | rf)+
+let ra = hb | hb;mo | hb;fr
+
+let ppo = po;[W] | [R];po
+let hb2 = (ppo | rfe)+
+let ra2 = (hb2 | hb2;mo | hb2;fr | po;fr)
+
+assert ra <= ra2
+assert ra2 <= ra

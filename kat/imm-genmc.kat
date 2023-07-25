@@ -1,0 +1,62 @@
+// Extended coherence order
+let eco = (rf | mo | fr)+
+
+// ---------------------------------------------------------------------
+// RC11 Happens-before
+// ---------------------------------------------------------------------
+
+// Optimized calculation of synchronizes-with
+// Save the view of write messages
+
+let relseq = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)*
+let sw_to_r = relseq ; rf ; [ACQ]
+let sw_to_f = relseq ; rf ; po ; [F|TJ|TB] ; [ACQ]
+let sw = sw_to_r | sw_to_f
+let asw = tc | tj
+
+assert sw = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F|TJ|TB])? ; [ACQ]
+
+// Optimized calculation of happens-before.
+// Save the part of `hb` that does not finish with a reads-from edge
+
+view hb_stable = (po-imm | (sw_to_r | asw) ; po-imm | sw_to_f)+
+let hb = hb_stable | hb_stable? ; (sw_to_r | asw)
+
+assert hb = (po | sw | asw)+
+
+// ---------------------------------------------------------------------
+// IMM Consistency axioms
+// ---------------------------------------------------------------------
+
+let bob = po ; [REL] | [ACQ] ; po | po ; [F] | [F] ; po | [W;REL]; po-loc ; [W]
+
+let deps = data | ctrl | addr ; po? | rmw
+let ppo = [Dep] ; (deps | rfi)+ ; [W] | bob | detour
+
+// assert rmw <= ppo
+// assert detour <= ppo
+// assert [R]; po; [W&REL] <= ppo
+
+// No OOTA
+// acyclic (ppo | rf)
+
+// Coherence : Optimize the checking of irreflexive (hb ; eco)
+coherence (hb_stable)
+
+// RMW atomicity
+// check  mo-imm ; [UW] <= rf ; po-imm
+
+// global ordering constraint
+let FSC = [F] ; [SC]
+let fhb = [F] ; hb
+let hbf = hb ; [F]
+let scb = po | rf | mo | fr
+let psc = [SC] ; po ; hb ; po ; [SC]
+        | [SC] ; fhb? ; scb ; hbf? ; [SC]
+        | FSC ; hb ; FSC
+        | FSC ; hb ; eco ; hb ; FSC
+        | SC ; po ; SC
+acyclic psc
+
+let ar = rfe | ppo | FSC ; hb ; eco ; hb ; FSC
+acyclic ar

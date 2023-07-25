@@ -1,0 +1,10 @@
+declare rf
+declare rf-1
+declare mo
+
+let fr = rf-1 ; mo
+let eco1 = (rf | mo | fr)+
+let eco2 = (rf | mo;rf? | fr;rf?)
+
+assert eco2 <= eco1
+assert eco1 <= eco2

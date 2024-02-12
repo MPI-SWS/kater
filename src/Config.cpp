@@ -16,8 +16,6 @@
  * http://www.gnu.org/licenses/gpl-3.0.html.
  */
 
-#include <config.h>
-
 #include "Config.hpp"
 #include "Error.hpp"
 #include <climits>
@@ -29,6 +27,7 @@
 
 void Config::reset()
 {
+	parallel = true;
 	debug = false;
 	debugOnly = "";
 	verbose = 0;
@@ -43,39 +42,35 @@ void Config::printUsage(const char *kater)
 	/* Reset defaults before printing */
 	reset();
 
-	printf(
-"OVERVIEW: kater -- consistency check routine generator\n"
-"Usage: %s [options] <input file>\n"
-"\n"
-"OPTIONS:\n"
-"\n"
-"-h, --help                  Display this help message and exit\n"
+	printf("OVERVIEW: kater -- consistency check routine generator\n"
+	       "Usage: %s [options] <input file>\n"
+	       "\n"
+	       "OPTIONS:\n"
+	       "\n"
+	       "-h, --help                  Display this help message and exit\n"
+	       "--no-par                    Do not check Kater assertions in parallel.\n"
 #ifdef ENABLE_KATER_DEBUG
-"-d, --debug                 Print all debugging information.\n"
-"                            Default: %d\n"
-"--debug-only                Print debugging information of the specified type(s).\n"
-"                            Default: \"%s\"\n"
+	       "-d, --debug                 Print all debugging information.\n"
+	       "                            Default: %d\n"
+	       "--debug-only                Print debugging information of the specified type(s).\n"
+	       "                            Default: \"%s\"\n"
 #endif
-"-e, --export                Whether code for dynamic checks will be exported.\n"
-"                            Default: %d\n"
-"-n, --name                  Name to be used for the resulting files.\n"
-"                            Default: \"%s\" (prints to stdout)\n"
-"-p, --prefix                Directory where the resulting files will be stored.\n"
-"                            Has no effect without -n.\n"
-"                            Default: \"%s\"\n"
-"-v[NUM], --verbose[=NUM]    Print verbose execution information. NUM is optional:\n"
-"                            0 is quiet; 1 prints status; 2 is noisy;\n"
-"                            3 is noisier.\n"
-"                            Default: %d\n",
-		kater,
+	       "-e, --export                Whether code for dynamic checks will be exported.\n"
+	       "                            Default: %d\n"
+	       "-n, --name                  Name to be used for the resulting files.\n"
+	       "                            Default: \"%s\" (prints to stdout)\n"
+	       "-p, --prefix                Directory where the resulting files will be stored.\n"
+	       "                            Has no effect without -n.\n"
+	       "                            Default: \"%s\"\n"
+	       "-v[NUM], --verbose[=NUM]    Print verbose execution information. NUM is optional:\n"
+	       "                            0 is quiet; 1 prints status; 2 is noisy;\n"
+	       "                            3 is noisier.\n"
+	       "                            Default: %d\n",
+	       kater, static_cast<int>(parallel),
 #ifdef ENABLE_KATER_DEBUG
-		debug,
-		debugOnly.c_str(),
+	       debug, debugOnly.c_str(),
 #endif
-		static_cast<int>(generate),
-		name.c_str(),
-		dir.c_str(),
-		verbose);
+	       static_cast<int>(generate), name.c_str(), dir.c_str(), verbose);
 	exit(0);
 }
 
@@ -84,16 +79,18 @@ void Config::parseOptions(int argc, char **argv)
 	/* Reset defaults before parsing the options */
 	reset();
 
+	static constexpr int parallelOpt = 4142;
 #ifdef ENABLE_KATER_DEBUG
-#define DEBUG_ONLY_OPT 4242
+	static constexpr int debugOnlyOpt = 4242;
 #endif
 
 	const char *shortopts = "hden:p:v::";
 	const struct option longopts[] = {
 		{"help", no_argument, nullptr, 'h'},
+		{"no-par", no_argument, nullptr, parallelOpt},
 #ifdef ENABLE_KATER_DEBUG
 		{"debug", no_argument, nullptr, 'd'},
-		{"debug-only", required_argument, nullptr, DEBUG_ONLY_OPT},
+		{"debug-only", required_argument, nullptr, debugOnlyOpt},
 #endif
 		{"export", no_argument, nullptr, 'e'},
 		{"name", required_argument, nullptr, 'n'},
@@ -109,6 +106,9 @@ void Config::parseOptions(int argc, char **argv)
 		switch (opt) {
 		case 'h':
 			printUsage(argv[0]);
+			break;
+		case parallelOpt:
+			parallel = false;
 			break;
 		case 'e':
 			generate = true;
@@ -127,7 +127,7 @@ void Config::parseOptions(int argc, char **argv)
 			debug = true;
 			katerDebug = true;
 			break;
-		case DEBUG_ONLY_OPT:
+		case debugOnlyOpt:
 			debugOnly = debugOnly.empty() ? optarg : (debugOnly + optarg);
 			addDebugType(optarg);
 			break;

@@ -1,11 +1,10 @@
 include "../../kat/c11-old.kat"
 include "../../kat/power-fm-simpl.kat"
 
-assume rf;fr-imm <= mo-imm
 assume rf;rmw <= mo-imm
 
 // The commented-out clauses on the RHS discard "uninteresting" counterexamples
-assert [R|W];c11-old::psc+;[R|W] <=&id power-fm-simpl::ar |
+assert [R|W];c11-old::psc+;[R|W] & id <= power-fm-simpl::ar |
 				   fr; [SC;W]; po; [SC;W]; mo; [SC;W]; po; [REL;W]; rfe |
 				   any; (fr;mo) ;any
 				   // po-imm; [REL;W] ;rfe; [ACQ;R]; fr-imm; [REL;W]; rfe; [ACQ;R] ;po-imm; [SC;R]; fr-imm  |

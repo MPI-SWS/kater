@@ -23,8 +23,7 @@
 #include <typeinfo>
 #include <utility>
 
-template <typename T>
-auto get_most_derived(const T &obj) -> const void*;
+template <typename T> auto get_most_derived(const T &obj) -> const void *;
 
 /************************************************************
  *                 VisitableContainer class
@@ -49,16 +48,15 @@ class BaseVisitor;
 class VisitableContainer {
 
 protected:
-    ~VisitableContainer() = default;
+	~VisitableContainer() = default;
 
 private:
-    [[nodiscard]] virtual auto isContainer() const -> bool { return true; }
+	[[nodiscard]] virtual auto isContainer() const -> bool { return true; }
 
-    virtual void visitChildren(BaseVisitor& visitor) const = 0;
+	virtual void visitChildren(BaseVisitor &visitor) const = 0;
 
-    friend BaseVisitor;
+	friend BaseVisitor;
 };
-
 
 /************************************************************
  *                 BaseVisitor class
@@ -70,12 +68,11 @@ private:
 class BaseVisitor {
 
 public:
-	template <typename T>
-	void operator()(const T &obj) {
+	template <typename T> void operator()(const T &obj)
+	{
 		if constexpr (std::is_base_of_v<VisitableContainer, T>) {
-			if (static_cast<const VisitableContainer&>(obj).isContainer()) {
-				static_cast<const VisitableContainer&>(obj).
-					visitChildren(*this);
+			if (static_cast<const VisitableContainer &>(obj).isContainer()) {
+				static_cast<const VisitableContainer &>(obj).visitChildren(*this);
 			} else {
 				visit(get_most_derived(obj), typeid(obj));
 			}
@@ -91,7 +88,6 @@ private:
 	virtual void visit(const void *ptr, const std::type_info &type) = 0;
 };
 
-
 /************************************************************
  *                 LambdaVisitor class
  ************************************************************/
@@ -100,46 +96,43 @@ private:
  * Combines multiple lambdas into one using C++17-folds.
  * Automatically constructs an if-then-else chain.
  */
-template <typename Function, typename ... Types>
-class LambdaVisitor : public BaseVisitor {
+template <typename Function, typename... Types> class LambdaVisitor : public BaseVisitor {
 
 public:
 	explicit LambdaVisitor(Function f) : f_(std::move(f)) {}
 
 private:
-	template <typename T>
-	auto tryVisit(const void *ptr, const std::type_info& type) -> bool {
+	template <typename T> auto tryVisit(const void *ptr, const std::type_info &type) -> bool
+	{
 		if (type == typeid(T)) {
-			f_(*static_cast<const T*>(ptr));
+			f_(*static_cast<const T *>(ptr));
 			return true;
 		}
 		return false;
 	}
 
-	void visit(const void *ptr, const std::type_info& type) override {
+	void visit(const void *ptr, const std::type_info &type) override
+	{
 		(tryVisit<Types>(ptr, type) || ...);
 	}
 
 	Function f_;
 };
 
-
 /************************************************************
  *                 Utilities and helpers
  ************************************************************/
 
-template <typename T>
-auto get_most_derived(const T &obj) -> const void*
+template <typename T> auto get_most_derived(const T &obj) -> const void *
 {
 	if constexpr (!std::is_polymorphic_v<T> || std::is_final_v<T>) {
 		return &obj;
 	} else { /* else is necessary for constexpr */
 		return dynamic_cast<const void *>(&obj);
-}
+	}
 }
 
-template <typename... Functions>
-auto overload(Functions... functions)
+template <typename... Functions> auto overload(Functions... functions)
 {
 	struct lambda : Functions... {
 		lambda(Functions... functions) : Functions(std::move(functions))... {}
@@ -150,10 +143,10 @@ auto overload(Functions... functions)
 	return lambda(std::move(functions)...);
 }
 
-template <typename ... Types>
-struct type_list {};
+template <typename... Types> struct type_list {
+};
 
-template <typename ... Types, typename ... Functions>
+template <typename... Types, typename... Functions>
 auto make_visitor(type_list<Types...> /*unused*/, Functions... funcs)
 {
 	auto overloaded = overload(std::move(funcs)...);

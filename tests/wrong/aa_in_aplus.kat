@@ -1,0 +1,5 @@
+relation a
+
+assume a;a <= a+
+
+assert a;a <= a

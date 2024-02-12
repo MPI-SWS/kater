@@ -42,7 +42,9 @@ public:
 	TransLabel() = delete;
 	TransLabel(std::optional<Relation> id, const PredicateSet &preG = {},
 		   const PredicateSet &postG = {})
-		: id(id), preChecks(preG), postChecks(postG) {}
+		: id(id), preChecks(preG), postChecks(postG)
+	{
+	}
 
 	[[nodiscard]] auto getRelation() const -> const std::optional<Relation> & { return id; }
 	auto getRelation() -> std::optional<Relation> & { return id; }
@@ -54,6 +56,10 @@ public:
 	auto getPostChecks() -> PredicateSet & { return postChecks; }
 
 	[[nodiscard]] auto isPredicate() const -> bool { return !getRelation(); }
+	[[nodiscard]] auto isTruePredicate() const -> bool
+	{
+		return isPredicate() && !hasPreChecks();
+	}
 
 	[[nodiscard]] auto isRelation() const -> bool { return !isPredicate(); }
 
@@ -61,11 +67,19 @@ public:
 
 	[[nodiscard]] auto hasPostChecks() const -> bool { return !getPostChecks().empty(); }
 
-	[[nodiscard]] auto isBuiltin() const -> bool { return !getRelation().has_value() || getRelation()->isBuiltin(); }
+	[[nodiscard]] auto isBuiltin() const -> bool
+	{
+		return !getRelation().has_value() || getRelation()->isBuiltin();
+	}
 
-	[[nodiscard]] auto getCalcIndex() const -> int { assert(!isBuiltin()); return -(getRelation()->getID() + 1); }
+	[[nodiscard]] auto getCalcIndex() const -> int
+	{
+		assert(!isBuiltin());
+		return -(getRelation()->getID() + 1);
+	}
 
-	void flip() {
+	void flip()
+	{
 		/* Do not flip ε transitions; maintain unique representation */
 		if (isPredicate()) {
 			assert(!hasPostChecks());
@@ -78,52 +92,21 @@ public:
 	/* Attemps to merge OTHER into THIS and returns whether it
 	 * succeeded.  Two transitions can be merged if at least one
 	 * of them is an epsilon transition */
-	auto merge(const TransLabel &other,
-		   const std::function<bool(const TransLabel &)>& isValid = [](auto & /*lab*/){ return true; }) -> bool;
-
-	[[nodiscard]] auto composesWith(const TransLabel &other) const -> bool;
-
-	[[nodiscard]] auto matches(const TransLabel &other) const -> bool {
-		return getPreChecks().includes(other.getPreChecks()) &&
-			(!isRelation() || (other.isRelation() && getRelation()->includes(*other.getRelation()))) &&
-			getPostChecks().includes(other.getPostChecks());
-	}
+	auto merge(
+		const TransLabel &other, const std::function<bool(const TransLabel &)> &isValid =
+						 [](auto & /*lab*/) { return true; }) -> bool;
 
 	[[nodiscard]] auto toString() const -> std::string;
 
-	auto operator==(const TransLabel &other) const -> bool {
-		return getRelation() == other.getRelation() &&
-			getPreChecks() == other.getPreChecks() &&
-			getPostChecks() == other.getPostChecks();
-	}
-	auto operator!=(const TransLabel &other) const -> bool {
-		return !operator==(other);
-	}
+	auto operator<=>(const TransLabel &other) const = default;
 
-	auto operator<(const TransLabel &other) const -> bool {
-		return getRelation() < other.getRelation() ||
-			(getRelation() == other.getRelation() &&
-				(getPreChecks() < other.getPreChecks() ||
-				 (getPreChecks() == other.getPreChecks() &&
-				  getPostChecks() < other.getPostChecks())));
-	}
-	auto operator<=(const TransLabel &other) const -> bool {
-		return operator==(other) || operator<(other);
-	}
-	auto operator>=(const TransLabel &other) const -> bool {
-		return !operator<(other);
-	}
-	auto operator>(const TransLabel &other) const -> bool {
-		return !operator<(other) && !operator==(other);
-	}
-
-	friend auto operator<<(std::ostream &s, const TransLabel &t) -> std::ostream & {
+	friend auto operator<<(std::ostream &s, const TransLabel &t) -> std::ostream &
+	{
 		return s << t.toString();
 	}
 
 private:
 	std::optional<Relation> id;
-	static int calcNum;
 
 	PredicateSet preChecks;
 	PredicateSet postChecks;

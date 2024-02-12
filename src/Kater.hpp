@@ -32,7 +32,9 @@ class Kater {
 public:
 	Kater() = delete;
 	Kater(const Config &conf, std::unique_ptr<KatModule> mod)
-		: config(conf), module(std::move(mod)) {}
+		: config(conf), module(std::move(mod))
+	{
+	}
 
 	[[nodiscard]] auto getModule() const -> const KatModule & { return *module; }
 	auto getModule() -> KatModule & { return *module; }
@@ -44,13 +46,17 @@ public:
 	auto exportCode(std::string &dirPrefix, std::string &outPrefix) -> bool;
 
 private:
+	struct InclusionResult {
+		bool result{};
+		Counterexample cex{};
+	};
+
 	[[nodiscard]] auto getConf() const -> const Config & { return config; }
 	auto getCNFAs() -> CNFAs & { return cnfas; }
 
-	void expandSavedVars(URE &r);
-	void expandRfs(URE &r);
-	void registerDefaultAssumptions();
-	auto checkAssertion(Constraint *c, Counterexample &cex) -> bool;
+	auto isDFASubLanguageOfNFA(NFA &nfa, const NFA &other) const -> InclusionResult;
+	[[nodiscard]] auto checkInclusion(const SubsetConstraint &subsetC) const -> InclusionResult;
+	auto checkAssertion(Constraint *c) -> InclusionResult;
 
 	void generateNFAs();
 	auto checkExportRequirements() -> bool;

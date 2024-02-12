@@ -21,7 +21,20 @@
 
 ;;; Code:
 
+;; hook for user code
 (defvar kat-mode-hook nil)
+
+;; prettify some symbols
+;; (for help with strings are replacement text:  https://emacs.stackexchange.com/questions/34808/using-prettify-symbols-with-strings-instead-of-characters)
+(add-hook 'kat-mode-hook
+          (lambda ()
+            (push '("<=" . ?⊆) prettify-symbols-alist)
+	    (push '("|" . ?∪) prettify-symbols-alist)
+	    (push '("&" . ?∩) prettify-symbols-alist)
+	    (push '("^-1" . (?⁻ (Br . Bl) ?¹)) prettify-symbols-alist)))
+(add-hook 'kat-mode-hook (lambda ()
+                           "Turn on `prettify-symbols-mode' mode."
+                           (prettify-symbols-mode 1)))
 
 (defvar kat-mode-map
   (let ((map (make-keymap)))
@@ -37,13 +50,13 @@
 (setq kat-font-lock-keywords
       (let* (
             ;; define several category of keywords
-            (x-keywords '("assume" "let" "assert"))
+            (x-keywords '("let" "save" "view" "relation" "predicate" "disjoint" "assume""assert" "export"))
             (x-types '())
             (x-constants '("include"))
             (x-events '("R" "W" "F" "UR" "UW" "TJ" "TB" "TE" "TC" "NA"
 			   "REL" "ACQ" "SC" "RLX"
 			   "po-imm" "po" "po-loc-imm" "po-loc" "mo-imm" "mo" "rf" "fr-imm" "fr" "loc-overlap"))
-            (x-functions '("save" "coherence" "check" "acyclic" "error" "warning" "unless"))
+            (x-functions '("coherence" "acyclic" "error" "warning" "unless"))
 
             ;; generate regex string for each category of keywords
             (x-keywords-regexp (regexp-opt x-keywords 'words))
@@ -62,12 +75,11 @@
           ;; in general, put longer words first
           )))
 
-
 (defun kat-indent-line ()
   "Indent current line as kat code"
   (interactive)
   (beginning-of-line)
-  (if (looking-at "^[ \t]*\\(include\\|assume\\|let\\|save\\|assert\\|coherence\\|check\\|acyclic\\|error\\|warning\\|//\\)")
+  (if (looking-at "^[ \t]*\\(include\\|assume\\|view\\|let\\|save\\|assert\\|export\\|relation\\|predicate\\|coherence\\|check\\|acyclic\\|error\\|warning\\|//\\)")
       (indent-line-to 0)
     (let ((not-indented t) cur-indent)
       (progn
@@ -103,6 +115,7 @@
   (set-syntax-table kat-mode-syntax-table)
   (set (make-local-variable 'font-lock-defaults) '(kat-font-lock-keywords))
   (set (make-local-variable 'indent-line-function) 'kat-indent-line)
+  (run-hooks 'kat-mode-hook)
   )
 
 ;; add the mode to the `features' list

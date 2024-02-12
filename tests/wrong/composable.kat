@@ -1,0 +1,10 @@
+predicate X
+predicate Y
+predicate Z
+
+// X and Y do not compose with Z
+disjoint X # Z
+disjoint Y # Z
+
+// The should compose among themselves
+assert [X;Y] = 0

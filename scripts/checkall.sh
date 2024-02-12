@@ -2,21 +2,27 @@
 
 # Get binary's full path
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-KATER="${KATER:-$DIR/../src/kater}"
+KATER="${KATER:-$DIR/../Release/kater}"
 
+# Env variables
+TIMEFORMAT='%2R'
+
+total_time=0
 echo 'Running correct tests...'
 echo '------------------------------------------------------------'
-for t in ${DIR}/../tests/correct/*.kat
+for t in ${DIR}/../tests/correct/*/*.kat
 do
-    printf "%-50s: " \
+    printf "%-40s | " \
 	   "${t##*/}"
-    output=`"${KATER}" ${t} >/dev/null 2>&1 `
-    if test "$?" -ne 0
+    time=`{ time "${KATER}" ${t} > /dev/null 2>&1; } 2>&1`
+    status="$?"
+    total_time=$( bc <<<"scale=2; $total_time + $time" )
+    if test "$status" -ne 0
     then
-    	echo "Error"
+    	printf "%-6s | %-8s\n" "Error" "$time"
     	problem=1
     else
-	echo "OK"
+    	printf "%-6s | %-8s\n" "OK" "$time"
     fi
 done
 echo ''
@@ -25,24 +31,26 @@ echo 'Running wrong tests...'
 echo '------------------------------------------------------------'
 for t in ${DIR}/../tests/wrong/*.kat
 do
-    printf "%-50s: " \
+    printf "%-40s | " \
 	   "${t##*/}"
-    output=`"${KATER}" ${t} >/dev/null 2>&1`
-    if test "$?" -ne 6
+    time=`{ time "${KATER}" ${t} > /dev/null 2>&1; } 2>&1`
+    status="$?"
+    total_time=$( bc <<<"scale=2; $total_time + $time" )
+    if test "$status" -ne 6
     then
-    	echo "Error"
+    	printf "%-6s | %-8s\n" "Error" "$time"
     	problem=1
     else
-	echo "OK"
+	printf "%-6s | %-8s\n"  "OK" "$time"
     fi
 done
 echo ''
 
 if [[ "${problem}" -eq 1 ]]
 then
-    echo '-----------------------------------'
-    echo '--- UNEXPECTED TESTING RESULTS! ---'
-    echo '-----------------------------------'
+    echo '------------------------------------------------------------'
+    echo '--- UNEXPECTED TESTING RESULTS: ' "${total_time}" ' ---'
+    echo '------------------------------------------------------------'
     exit 1
 fi
-echo '--- Testing proceeded as expected'
+echo '--- Testing proceeded as expected: ' "${total_time}"

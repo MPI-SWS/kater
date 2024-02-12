@@ -1,0 +1,21 @@
+relation nrf
+relation nrf-1
+relation nco
+
+let nfr = nrf-1 ; nco
+let eco1 = (nrf | nco | nfr)+
+let eco2 = nrf | nco ; nrf? | nfr ; nrf?
+
+assume nrf   <= [W] ; nrf   ; [R]  // nrf   : W × R
+assume nrf-1 <= [R] ; nrf-1 ; [W]  // nrf-1 : R × W
+assume nco   <= [W] ; nco   ; [W]  // nco   : W × W
+
+assume rf <= [W] ; rf ; [R]
+assume [W;R] = 0
+
+assume [W ; R] = 0         // W ∩ R = ∅
+assume nco ; nco   <= nco  // nco is transitive.
+assume nrf ; nrf-1 <= id   // nrf is functional.
+
+assert eco2 <= eco1
+assert eco1 <= eco2

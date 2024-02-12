@@ -12,6 +12,15 @@ Checks: |
   -misc-no-recursion,
   -misc-use-anonymous-namespace,
   readability-*,
+  -readability-braces-around-statements,
   modernize-*,
   performance-*,
-  readability-*,
+CheckOptions:
+- key: readability-function-cognitive-complexity.IgnoreMacros
+  value: true
+- key: readability-identifier-length.IgnoredVariableNames
+  value: 's|t|r|p|id|b|rf|co|tc|tj'
+- key: readability-identifier-length.IgnoredLoopCounterNames
+  value: 'i|j|k'
+- key: readability-identifier-length.IgnoredParameterNames
+  value: 's|t|r|p|id|b|rf|co|tc|tj'

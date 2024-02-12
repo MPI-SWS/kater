@@ -47,6 +47,10 @@
   #include <memory>
   #include <unordered_map>
   #include <vector>
+
+  VSet<Predicate::ID> combinePredSets(VSet<Predicate::ID> current,
+				       Predicate p,
+				       const yy::location &loc);
 }
 
 
@@ -54,29 +58,30 @@
   ACYCLIC   "acyclic"
   ASSUME    "assume"
   ASSERT    "assert"
-  CHECK     "check"
   COHERENCE "coherence"
-  DECLARE   "declare"
-  DECLARE_LOC "declare-loc"
-  EMPTY	    "empty"
+  DISJOINT  "disjoint"
   ERROR	    "error"
+  EXPORT    "export"
+  GENMC     "genmc"
   ID_REL    "id"
   INCLUDE   "include"
   LET	    "let"
+  PREDICATE "predicate"
   RECOVERY  "recovery"
+  RELATION  "relation"
   ROT       "rot"
   SAVE      "save"
   TOTAL     "total"
   VIEW      "view"
   UNLESS    "unless"
   WARNING   "warning"
+  COLON     ":"
   DCOLON    "::"
   COMMA     ","
   ZERO      "0"
   MONE      "-1"
   EQ        "="
   LEQ       "<="
-  LEQID     "<=&id"
   SEMI      ";"
   AND       "&"
   ALT       "|"
@@ -89,15 +94,22 @@
   LBRACK    "["
   RBRACK    "]"
   SUPER     "^"
+  POUND     "#"
 ;
 
 %token YYEOF 0
 
 %token <std::string> ID;
-%token <std::string> QPATH;
+%token <std::string> QSTRING;
 %nterm <std::string> qualified_ID;
+%nterm <std::string> print_ID;
 %nterm <std::unique_ptr<RegExp>> rel;
-%nterm <std::unique_ptr<Constraint>> constraint;
+%nterm <VSet<Predicate::ID>> pred_list;
+%nterm <std::unique_ptr<Constraint>> assert_constraint;
+%nterm <std::unique_ptr<Constraint>> assume_constraint;
+%nterm <std::unique_ptr<Constraint>> export_constraint;
+%nterm <std::unique_ptr<Constraint>> unless_clause;
+%nterm <std::unique_ptr<Constraint>> unless_opt;
 %nterm <std::string> reduce_opt;
 
 %precedence "=" "<="
@@ -118,45 +130,49 @@ main:	  %empty		{ }
 	| main decl		{ }
         ;
 
-decl:     "include" QPATH                  { drv.parse($2.substr(1, $2.size()-2)); }
-	| "let" ID "=" rel                 { drv.registerID($2, std::move($4)); }
-	| "declare" ID                     { drv.registerID($2, CharRE::create(
-								    TransLabel(Relation::createUser()))); }
-	| "declare-loc" ID                 { auto r = Relation::createUser();
-	                      		     auto rloc = Relation::createUser();
-					     rloc.markAsPerLocOf(r);
-					     drv.registerID($2, CharRE::create(TransLabel(r)));
-					     drv.registerID($2 + "-loc", CharRE::create(TransLabel(rloc))); }
-	| "save" reduce_opt ID "=" rel     { drv.registerSaveID($3, $2, std::move($5), @$); }
-	| "view" ID "=" rel		   { drv.registerViewID($2, std::move($4)); }
-	| "assume" constraint  		   { drv.registerAssume(std::move($2), @$); }
-	| "assert" constraint 	           { drv.registerAssert(std::move($2), @$); }
-	| "check" constraint		   { $2->setType(Constraint::Type::Consistency);
-	 				     drv.addConstraint(std::move($2), "", @$); }
-	| constraint			   { drv.addConstraint(std::move($1), "", @$); }
-	| "error" ID "unless" constraint   { $4->setType(Constraint::Type::Error);
-	 				     drv.addConstraint(std::move($4), $2, @$); }
-	| "warning" ID "unless" constraint { $4->setType(Constraint::Type::Warning);
-					     drv.addConstraint(std::move($4), $2, @$); }
+decl:     "include" QSTRING                { drv.parse($2.substr(1, $2.size()-2)); }
+	| "let" ID "=" rel                 { drv.registerDerived($2, std::move($4)); }
+	| "relation" ID                    { drv.registerRelation($2); }
+	| "predicate" ID print_ID          { drv.registerPredicate(std::move($2), std::move($3)); }
+	| "disjoint" pred_list             { drv.registerDisjointPreds($2); }
+	| "save" reduce_opt ID "=" rel     { drv.registerSaveDerived($3, $2, std::move($5), @$); }
+	| "view" ID "=" rel		   { drv.registerViewDerived($2, std::move($4)); }
+	| "assume" assume_constraint	   { drv.registerAssume(std::move($2), @$); }
+	| "assert" assert_constraint	   { drv.registerAssert(std::move($2), @$); }
+	| "export" export_constraint	   { drv.registerExport(std::move($2), @$); }
 	;
 
-qualified_ID: ID        { $$ = $1; }
-	| ID "::" ID    { $$ = $1 + "::" + $3; }
-	;
+pred_list: qualified_ID                  { $$ = combinePredSets({}, drv.getRegisteredIDAsPredicate(std::move($1), @$), @$); }
+	| pred_list POUND qualified_ID   { $$ = combinePredSets(std::move($1), drv.getRegisteredIDAsPredicate(std::move($3), @$), @$); }
 
 reduce_opt: %empty	        { $$ = ""; }
 	| "[" qualified_ID "]"	{ $$ = $2; }
 	;
 
-constraint:
-	  rel "=" rel		{ $$ = Constraint::createEquality(std::move($1), std::move($3)); }
-	| rel "<=" rel		{ $$ = SubsetConstraint::createOpt(std::move($1), std::move($3)); }
-	| rel "<=&id" rel	{ $$ = SubsetSameEndsConstraint::createOpt(std::move($1), std::move($3)); }
-	| "empty" rel		{ $$ = Constraint::createEmpty(std::move($2)); }
-	| "acyclic" rel		{ $$ = AcyclicConstraint::createOpt(std::move($2)); }
-	| "recovery" rel	{ $$ = RecoveryConstraint::create(std::move($2)); }
-	| "coherence" rel	{ $$ = CoherenceConstraint::create(std::move($2)); }
+assert_constraint:
+	  rel "=" rel		{ $$ = EqualityConstraint::createOpt(std::move($1), std::move($3), false); }
+	| rel "<=" rel		{ $$ = SubsetConstraint::createOpt(std::move($1), std::move($3), false); }
+	;
+
+assume_constraint:
+	  assert_constraint     { $$ = std::move($1); }
 	| "total" rel		{ $$ = TotalityConstraint::createOpt(std::move($2)); }
+	;
+
+export_constraint:
+	  "acyclic" rel unless_opt print_ID { $$ = AcyclicConstraint::createOpt(std::move($2), std::move($3), std::move($4)); }
+	| "recovery" rel	     { $$ = RecoveryConstraint::create(std::move($2)); }
+	| "coherence" rel	     { $$ = CoherenceConstraint::create(std::move($2)); }
+        | "error" ID unless_clause   { $$ = ErrorConstraint::create(std::move($3), $2); }
+	| "warning" ID unless_clause { $$ = WarningConstraint::create(std::move($3), $2); }
+	;
+
+unless_clause:
+	 "unless" assert_constraint { $$ = std::move($2); }
+	;
+
+unless_opt: %empty      { $$ = nullptr; }
+	| unless_clause	{ $$ = std::move($1); }
 	;
 
 rel:	  "0"			{ $$ = RegExp::createFalse(); }
@@ -177,6 +193,13 @@ rel:	  "0"			{ $$ = RegExp::createFalse(); }
 	| rel "^" "=" 		{ $$ = RegExp::createSym(std::move($1)); }
 	;
 
+qualified_ID: ID        { $$ = $1; }
+	| ID "::" ID    { $$ = $1 + "::" + $3; }
+	;
+
+print_ID: %empty                      { $$ = std::string(); }
+	| "(" "genmc" ":" QSTRING ")" { $$ = std::move($4.substr(1, $4.size()-2)); }
+	;
 %%
 
 void yy::parser::error(const location_type &l, const std::string &m)
@@ -221,4 +244,15 @@ void yy::parser::report_syntax_error(const yy::parser::context &ctx) const
 		std::cerr << "\n";
 		reset_current_line();
 	}
+}
+
+// FIXME: Go over all registered predicates to ensure they are disjoint
+VSet<Predicate::ID>
+combinePredSets(VSet<Predicate::ID> current, Predicate p, const yy::location &loc)
+{
+	if (!current.insert(p.getID()).second) {
+		std::cerr << loc << ": ";
+		std::cerr << p << " already in disjoint set\n";
+	}
+	return current;
 }

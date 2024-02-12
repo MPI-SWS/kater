@@ -1,5 +1,28 @@
-save[ppo] ppo = ([R|F|UW]; po | po ; [W|F|SC])+
+let ppo = po // ppo decides how the graph is cut, hence ppo = po
+let tso = ([R|F|UW|TJ|TB]; po | po ; [W|F|TE|TC] | [W;SC]; po; [R;SC] | rfe | mo | fr)
 
-let tso = (ppo | rfe | mo | fr)
+view hb_stable = (po-imm | (rf | tc | tj); po-imm)+
+export coherence (hb_stable)
 
-acyclic tso
+export acyclic tso
+
+// ---------------------------------------------------------------------
+// TSO error detection
+// ---------------------------------------------------------------------
+
+let ww_conflict = [W] ; loc-overlap ; [W]
+let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
+let conflicting = ww_conflict | wr_conflict
+let na_conflict = [NA] ; conflicting | conflicting ; [NA]
+view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+
+export error VE_AccessNonMalloc unless  alloc <= hb_stable
+export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0
+
+export error VE_AccessFreed     unless  alloc^-1? ; free ; [FREE] <= hb_stable
+export error VE_AccessFreed     unless  [FREE] ; free^-1 ; alloc = 0
+export error VE_AccessFreed     unless  [NOTHPPROT] ; alloc^-1? ; free ; [HPRET] <= hb_stable
+export error VE_AccessFreed     unless  [HPRET] ; free^-1 ; alloc ; [NOTHPPROT] = 0
+
+export error VE_RaceNotAtomic   unless  na_conflict <= hb_stable
+export warning VE_WWRace        unless  ww_conflict <= porf_stable

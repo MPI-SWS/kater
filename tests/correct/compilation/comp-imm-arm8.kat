@@ -1,0 +1,10 @@
+include "../../../kat/arm8.kat"
+include "../../../kat/imm.kat"
+
+  // [UR];po <= (ctrl | data),
+
+// assume [R;SC] = 0
+// assume [W;SC] = 0
+assume rf;rmw <= mo-imm
+
+assert imm::psc <= arm8::ob*

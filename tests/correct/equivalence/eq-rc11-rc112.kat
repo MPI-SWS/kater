@@ -1,0 +1,5 @@
+include "../../../kat/rc11.kat"
+include "../../../kat/rc112.kat"
+
+assert rc11::hb = rc112::hb | po
+assert rc11::psc = rc112::psc

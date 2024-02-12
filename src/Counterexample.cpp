@@ -18,8 +18,8 @@
 
 #include "Counterexample.hpp"
 
-auto operator<<(std::ostream& s, const Counterexample &c) -> std::ostream &
+auto operator<<(std::ostream &s, const Counterexample &c) -> std::ostream &
 {
-	std::for_each(c.begin(), c.end(), [&](auto &lab){ s << lab << " "; });
+	std::for_each(c.begin(), c.end(), [&](auto &lab) { s << lab << " "; });
 	return s;
 }

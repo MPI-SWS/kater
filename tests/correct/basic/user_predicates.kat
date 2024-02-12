@@ -1,0 +1,21 @@
+// Declare some predicates
+predicate M
+predicate N
+predicate O
+predicate X
+predicate Y
+predicate Z
+
+// M,N,O are pairwise disjoint
+disjoint M # O # N
+
+// X and Y do not compose with Z
+disjoint X # Z
+disjoint Y # Z
+
+// Check some invalid combinations
+assert [M;N] = 0
+assert [O;N] = 0
+assert [O;M] = 0
+assert [O;M;N] = 0
+assert [X;Y;Z] = 0

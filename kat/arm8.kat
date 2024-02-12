@@ -1,10 +1,16 @@
-let DMB_SY = [F ; SC] | [F ; REL]
-let DMB_LD = [F ; ACQ] | [F ; SC]
-let DMB_ST = [Fwmb]
-let ISB    = [Frmb]   // hack
-let A      = [R ; SC] | [R ; ACQ]
-let Q      = [R ; ACQ] | [R ; SC]
-let L      = [W ; SC] | [W ; REL]
+predicate Fisb
+predicate Fdmb_st
+
+disjoint R # W # Fisb # Fdmb_st
+disjoint Fisb # Fdmb_st # NA # SC # ACQ # REL
+
+let DMB_SY = [F ; REL]
+let DMB_LD = [F ; ACQ]
+let DMB_ST = [Fdmb_st]
+let ISB    = [Fisb]   // hack
+let A      = [R ; ACQ]
+let Q      = [R ; ACQ]
+let L      = [W ; REL]
 let R_ret  = [R]      // hack
 
 let dmb.full = DMB_SY

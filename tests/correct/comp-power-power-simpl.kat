@@ -1,4 +1,0 @@
-include "../../kat/power-fm.kat"
-include "../../kat/power-fm-simpl.kat"
-
-assert power-fm::ar <=&id power-fm-simpl::ar // | po

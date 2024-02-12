@@ -3,4 +3,4 @@ include "../../kat/power-weak.kat"
 
 assume rf;rmw <= mo-imm
 
-assert [R|W];c11-old::psc+;[R|W] <=&id power-weak::ar
+assert [R|W];c11-old::psc+;[R|W] & id <= power-weak::ar

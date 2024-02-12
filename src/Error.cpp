@@ -21,9 +21,6 @@ bool isCurrentDebugType(const char *dbgType)
 	return false;
 }
 
-void addDebugType(const char *dbgType)
-{
-	currentDbgTypes.push_back(dbgType);
-}
+void addDebugType(const char *dbgType) { currentDbgTypes.push_back(dbgType); }
 
 #endif /* ENABLE_KATER_DEBUG */

@@ -3,7 +3,7 @@
 "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
 <head>
-<!-- 2023-07-25 Tue 13:28 -->
+<!-- 2024-02-06 Tue 12:45 -->
 <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>@@html:&lt;font style="font-variant: small-caps"&gt;Kater&lt;/font&gt;@@@@latex:\textsc{Kater}\xspace@@: Automating Weak Memory Model Metatheory and Consistency Checking</title>
@@ -200,45 +200,45 @@
 <h2>Table of Contents</h2>
 <div id="text-table-of-contents" role="doc-toc">
 <ul>
-<li><a href="#org76e2113">1. Introduction </a></li>
-<li><a href="#org62ebe49">2. Usage </a>
+<li><a href="#org9de2907">1. Introduction </a></li>
+<li><a href="#org2f3d63d">2. Usage </a>
 <ul>
-<li><a href="#org506ea15">2.1. Syntax </a></li>
-<li><a href="#orgdaf603d">2.2. Proof Mode </a>
+<li><a href="#org6554a58">2.1. Syntax </a></li>
+<li><a href="#orgdc77ca8">2.2. Proof Mode </a>
 <ul>
-<li><a href="#org9ed177a">2.2.1. Complete Fragment</a></li>
-<li><a href="#org433b79d">2.2.2. Incomplete Fragment</a></li>
-<li><a href="#orgd002bfd">2.2.3. Custom Relations</a></li>
+<li><a href="#org93522ec">2.2.1. Complete Fragment</a></li>
+<li><a href="#orge3ebb4b">2.2.2. Incomplete Fragment</a></li>
+<li><a href="#orgdb9ffbb">2.2.3. Custom Relations and Primitives</a></li>
 </ul>
 </li>
-<li><a href="#orgedd8aec">2.3. Export Mode </a></li>
+<li><a href="#orgd74c587">2.3. Export Mode </a></li>
 </ul>
 </li>
-<li><a href="#org1d11621">3. Contact </a></li>
-<li><a href="#orgb8f819b">4. Bibliography </a></li>
+<li><a href="#org7ac1be7">3. Contact </a></li>
+<li><a href="#org7f2706d">4. Bibliography </a></li>
 </ul>
 </div>
 </div>
 
 
-<div id="outline-container-org76e2113" class="outline-2">
-<h2 id="org76e2113"><span class="section-number-2">1.</span> Introduction <a id="orga423528"></a></h2>
+<div id="outline-container-org9de2907" class="outline-2">
+<h2 id="org9de2907"><span class="section-number-2">1.</span> Introduction <a id="org1c98b35"></a></h2>
 <div class="outline-text-2" id="text-1">
 <p>
 <font style="font-variant: small-caps">Kater</font> is a tool that can automatically prove metatheoretic
 queries about (weak) memory consistency models (e.g., compilation
 correctness, program transformations), and also produce consistency
 checking routines for stateless model checkers (currently only
-<font style="font-variant: small-caps">GenMC</font> (<a href="#citeproc_bib_item_1">Kokologiannakis and Vafeiadis 2021</a>) is supported).
+<font style="font-variant: small-caps">GenMC</font> <a href="&amp;kokologiannakis2021:genmc-tool">&amp;kokologiannakis2021:genmc-tool</a> is supported).
 The underlying theory of <font style="font-variant: small-caps">Kater</font> is described in a POPL 2023
-paper (<a href="#citeproc_bib_item_2">Kokologiannakis, Lahav, and Vafeiadis 2023</a>).
+paper <a href="&amp;kokologiannakis2023:kater">&amp;kokologiannakis2023:kater</a>.
 </p>
 </div>
 </div>
 
 
-<div id="outline-container-org62ebe49" class="outline-2">
-<h2 id="org62ebe49"><span class="section-number-2">2.</span> Usage <a id="org0f41979"></a></h2>
+<div id="outline-container-org2f3d63d" class="outline-2">
+<h2 id="org2f3d63d"><span class="section-number-2">2.</span> Usage <a id="org756dfd6"></a></h2>
 <div class="outline-text-2" id="text-2">
 <p>
 An invocation of <font style="font-variant: small-caps">Kater</font> resembles the following:
@@ -251,7 +251,7 @@ An invocation of <font style="font-variant: small-caps">Kater</font> resembles t
 <p>
 where <code>OPTIONS</code> include options that can be passed to <font style="font-variant: small-caps">Kater</font> (use
 <code>--help</code> for a full list), and <code>file</code> is a file in the KAT language
-(see <a href="#org32527c9">2.1</a> for more details).
+(see <a href="#orgc23499f">2.1</a> for more details).
 </p>
 
 <p>
@@ -261,23 +261,25 @@ try to prove all metatheoretic queries of the input, and <i>export mode</i>
 </p>
 </div>
 
-<div id="outline-container-org506ea15" class="outline-3">
-<h3 id="org506ea15"><span class="section-number-3">2.1.</span> Syntax <a id="org32527c9"></a></h3>
+<div id="outline-container-org6554a58" class="outline-3">
+<h3 id="org6554a58"><span class="section-number-3">2.1.</span> Syntax <a id="orgc23499f"></a></h3>
 <div class="outline-text-3" id="text-2-1">
 <p>
-A KAT file is a series of <code>declare</code>, <code>declare-loc</code>, <code>let</code>, <code>assert</code>
-and <code>assume</code> statements (see <a href="#orga0c7307">2.2</a> for examples).
+A KAT file is a series of <code>relation</code>, <code>predicate</code>, <code>disjoint</code>, <code>let</code>, <code>assert</code>
+and <code>assume</code> statements (see <a href="#org3ecbcc8">2.2</a> for examples).
 <font style="font-variant: small-caps">Kater</font> also provides syntax relevant to code exporting, but this
 code is unstable and subject to change, so we do not provide more
-details here (see <a href="#org2156668">2.3</a> for a glimpse).
+details here (see <a href="#org7c762f8">2.3</a> for a glimpse).
 </p>
 
 <p>
-<code>declare r</code> declares a new relation <code>r</code>, <code>declare-loc r</code> declares a
-new relation <code>r</code> and its per-location counterpart <code>r-loc</code>, <code>let</code> is
-used to define a derived relation, <code>assert</code> to declare a metatheoretic
-constraint to be checked by <font style="font-variant: small-caps">Kater</font>, and <code>assume</code> to declare an
-assumption to be taken into account when proving the file's <code>assert</code>​s.
+<code>relation r</code> declares a new relation <code>r</code> and its per-location counterpart <code>r-loc</code>,
+<code>predicate p</code> declares a new predicate <code>p</code>,
+<code>disjoint L</code> declares that the <code>#</code>-separated predicates in list <code>L</code> are pairwise disjoint,
+<code>let</code> is used to define a derived relation,
+<code>assert</code> to declare a metatheoretic constraint to be checked by <font style="font-variant: small-caps">Kater</font>,
+and <code>assume</code> to declare an assumption to be taken into account when proving the
+file's <code>assert</code>​s.
 </p>
 
 <p>
@@ -294,7 +296,7 @@ if possible, and not re-declare such primitive relations.
 </p>
 <ul class="org-ul">
 <li>Disjoint tests: e.g., <code>R &amp; W = 0</code></li>
-<li>Domains and ranges: e.g., <code>rf = rfe | rfi</code></li>
+<li>Domains and ranges: e.g., <code>rf &lt;​= [W]; rf; [R]</code></li>
 <li>Transitivity: e.g., <code>po ; po &lt;​= po</code></li>
 <li>From-read properties: <code>rf ; fr &lt;​= mo</code> and <code>fr ; mo+ &lt;​= fr</code></li>
 </ul>
@@ -305,12 +307,12 @@ Users can define additional properties using <code>assume</code> statements.
 </div>
 </div>
 
-<div id="outline-container-orgdaf603d" class="outline-3">
-<h3 id="orgdaf603d"><span class="section-number-3">2.2.</span> Proof Mode <a id="orga0c7307"></a></h3>
+<div id="outline-container-orgdc77ca8" class="outline-3">
+<h3 id="orgdc77ca8"><span class="section-number-3">2.2.</span> Proof Mode <a id="org3ecbcc8"></a></h3>
 <div class="outline-text-3" id="text-2-2">
 </div>
-<div id="outline-container-org9ed177a" class="outline-4">
-<h4 id="org9ed177a"><span class="section-number-4">2.2.1.</span> Complete Fragment</h4>
+<div id="outline-container-org93522ec" class="outline-4">
+<h4 id="org93522ec"><span class="section-number-4">2.2.1.</span> Complete Fragment</h4>
 <div class="outline-text-4" id="text-2-2-1">
 <p>
 We begin with some examples that fall within <font style="font-variant: small-caps">Kater</font>'s complete
@@ -365,8 +367,8 @@ in its builtin theory.
 </div>
 </div>
 
-<div id="outline-container-org433b79d" class="outline-4">
-<h4 id="org433b79d"><span class="section-number-4">2.2.2.</span> Incomplete Fragment</h4>
+<div id="outline-container-orge3ebb4b" class="outline-4">
+<h4 id="orge3ebb4b"><span class="section-number-4">2.2.2.</span> Incomplete Fragment</h4>
 <div class="outline-text-4" id="text-2-2-2">
 <p>
 <font style="font-variant: small-caps">Kater</font> treats generic non-emptiness assumptions like <code>a &lt;​= b</code> in
@@ -417,13 +419,13 @@ produces a counterexample if it is omitted.
 </div>
 </div>
 
-<div id="outline-container-orgd002bfd" class="outline-4">
-<h4 id="orgd002bfd"><span class="section-number-4">2.2.3.</span> Custom Relations</h4>
+<div id="outline-container-orgdb9ffbb" class="outline-4">
+<h4 id="orgdb9ffbb"><span class="section-number-4">2.2.3.</span> Custom Relations and Primitives</h4>
 <div class="outline-text-4" id="text-2-2-3">
 <p>
-Users can declare additional relations using the <code>declare r</code>
-and <code>declare-loc r</code> commands. (The latter also defines <code>r-loc</code>
-and equips <font style="font-variant: small-caps">Kater</font> with the knowledge that <code>r-loc &lt;​= r</code>.)
+Users can declare additional relations using the <code>relation r</code>
+command. This will declare <code>r</code> as well <code>r-loc</code>,
+and equips <font style="font-variant: small-caps">Kater</font> with the knowledge that <code>r-loc &lt;​= r</code>.
 </p>
 
 <p>
@@ -431,9 +433,9 @@ An example where <code>rf</code> is re-defined as a user-declared relation can b
 seen below.
 </p>
 <div class="org-src-container">
-<pre class="src src-sh"><span style="color: #6c71c4;">declare</span> rf
-<span style="color: #6c71c4;">declare</span> rf-1
-<span style="color: #6c71c4;">declare</span> co
+<pre class="src src-sh">relation rf
+relation rf-1
+relation co
 
 <span style="color: #6c71c4;">let</span> <span style="color: #6c71c4;">nfr</span> = rf-1; co
 
@@ -454,16 +456,47 @@ assert eco1 &lt;= eco2
 desired result. Using the builtin theory in this example eliminates
 the need for such assumptions.
 </p>
+
+<p>
+In a similar manner, users can declare additional predicates
+using the <code>predicate p</code> command. The <code>disjoint</code> command can be
+used to declare that some <code>#</code>-separated predicates are pairwise
+disjoint, as in the example below:
+</p>
+<div class="org-src-container">
+<pre class="src src-sh">// Declare some predicates
+predicate M
+predicate N
+predicate O
+predicate X
+predicate Y
+predicate Z
+
+// M,N,O are pairwise disjoint
+disjoint M <span style="color: #586e75; font-style: italic;"># </span><span style="color: #586e75; font-style: italic;">O # N</span>
+
+// X and Y do not compose with Z
+disjoint X <span style="color: #586e75; font-style: italic;"># </span><span style="color: #586e75; font-style: italic;">Z</span>
+disjoint Y <span style="color: #586e75; font-style: italic;"># </span><span style="color: #586e75; font-style: italic;">Z</span>
+
+// Check some invalid combinations
+assert [M;N] = 0
+assert [O;N] = 0
+assert [O;M] = 0
+assert [O;M;N] = 0
+assert [X;Y;Z] = 0
+</pre>
+</div>
 </div>
 </div>
 </div>
 
-<div id="outline-container-orgedd8aec" class="outline-3">
-<h3 id="orgedd8aec"><span class="section-number-3">2.3.</span> Export Mode <a id="org2156668"></a></h3>
+<div id="outline-container-orgd74c587" class="outline-3">
+<h3 id="orgd74c587"><span class="section-number-3">2.3.</span> Export Mode <a id="org7c762f8"></a></h3>
 <div class="outline-text-3" id="text-2-3">
 <p>
 The code below produces <font style="font-variant: small-caps">GenMC</font> consistency checking code for RC11
-(<a href="#citeproc_bib_item_3">Lahav et al. 2017</a>).
+<a href="&amp;lahav2017:repairing">&amp;lahav2017:repairing</a>.
 </p>
 
 <div class="org-src-container">
@@ -527,8 +560,8 @@ error VE_RaceNotAtomic     unless  na_conflict &lt;= hb_stable
 </div>
 </div>
 
-<div id="outline-container-org1d11621" class="outline-2">
-<h2 id="org1d11621"><span class="section-number-2">3.</span> Contact <a id="orgcca5e4d"></a></h2>
+<div id="outline-container-org7ac1be7" class="outline-2">
+<h2 id="org7ac1be7"><span class="section-number-2">3.</span> Contact <a id="org7899cc7"></a></h2>
 <div class="outline-text-2" id="text-3">
 <p>
 For feedback, questions and bug reports please send an e-mail to
@@ -537,8 +570,8 @@ For feedback, questions and bug reports please send an e-mail to
 </div>
 </div>
 
-<div id="outline-container-orgb8f819b" class="outline-2">
-<h2 id="orgb8f819b"><span class="section-number-2">4.</span> Bibliography <a id="orged838eb"></a></h2>
+<div id="outline-container-org7f2706d" class="outline-2">
+<h2 id="org7f2706d"><span class="section-number-2">4.</span> Bibliography <a id="org37cd2ad"></a></h2>
 <div class="outline-text-2" id="text-4">
 <p>
 
@@ -548,7 +581,6 @@ For feedback, questions and bug reports please send an e-mail to
   <div class="csl-entry"><a id="citeproc_bib_item_1"></a>Kokologiannakis, Michalis, and Viktor Vafeiadis. 2021. “GenMC: A Model Checker for Weak Memory Models.” In <i>CAV 2021</i>, edited by Alexandra Silva and K. Rustan M. Leino, 12759:427–40. LNCS. Springer. doi:<a href="https://doi.org/10.1007/978-3-030-81685-8_20">10.1007/978-3-030-81685-8_20</a>.</div>
   <div class="csl-entry"><a id="citeproc_bib_item_2"></a>Kokologiannakis, Michalis, Ori Lahav, and Viktor Vafeiadis. 2023. “Kater: Automating Weak Memory Model Metatheory and Consistency Checking.” <i>Proc. ACM Program. Lang.</i> 7 (POPL). New York, NY, USA: ACM. doi:<a href="https://doi.org/10.1145/3571212">10.1145/3571212</a>.</div>
   <div class="csl-entry"><a id="citeproc_bib_item_3"></a>Lahav, Ori, Viktor Vafeiadis, Jeehoon Kang, Chung-Kil Hur, and Derek Dreyer. 2017. “Repairing Sequential Consistency in C/C++11.” In <i>PLDI 2017</i>, 618–32. Barcelona, Spain: ACM. doi:<a href="https://doi.org/10.1145/3062341.3062352">10.1145/3062341.3062352</a>.</div>
-</div>
 </div>
 </div>
 <div id="footnotes">
@@ -562,7 +594,7 @@ For feedback, questions and bug reports please send an e-mail to
 </div>
 </div></div>
 <div id="postamble" class="status">
-<p class="date">Created: 2023-07-25 Tue 13:28</p>
+<p class="date">Created: 2024-02-06 Tue 12:45</p>
 <p class="validation"><a href="https://validator.w3.org/check?uri=referer">Validate</a></p>
 </div>
 </body>

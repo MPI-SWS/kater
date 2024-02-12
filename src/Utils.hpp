@@ -25,8 +25,10 @@
 #include <fstream>
 #include <iostream>
 
+class Theory;
+
 auto openFileForWriting(const std::string &filename) -> std::ofstream;
 
-void printNFAToDot(const NFA &nfa, const std::string &filename);
+void printNFAToDot(const NFA &nfa, const std::string &filename, const Theory &theory);
 
 #endif /* KATER_UTILS_HPP */

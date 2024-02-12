@@ -1,0 +1,6 @@
+relation nrf
+
+assume nrf <= nrf ; [R]
+assume nrf <= [W;REL] ; nrf ; [R;ACQ]
+
+assert nrf+ = nrf

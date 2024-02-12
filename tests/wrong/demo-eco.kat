@@ -1,6 +1,6 @@
-declare rf
-declare rf-1
-declare mo
+relation rf
+relation rf-1
+relation mo
 
 let fr = rf-1 ; mo
 let eco1 = (rf | mo | fr)+

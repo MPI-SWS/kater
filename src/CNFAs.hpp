@@ -23,6 +23,9 @@
 #include "KatModuleAPI.hpp"
 #include "NFA.hpp"
 
+#include <optional>
+#include <vector>
+
 /*
  * Constrained NFAs class
  * A collection of NFAs representing different constraint types
@@ -33,39 +36,38 @@ class CNFAs {
 public:
 	CNFAs() = default;
 
-	using save_iter = std::vector<std::pair<NFA, VarStatus>>::iterator;
-	using save_const_iter = std::vector<std::pair<NFA, VarStatus>>::const_iterator;
-	using redc_iter = save_iter;
-	using redc_const_iter = save_const_iter;
-	using incl_iter = std::vector<std::pair<Inclusion<NFA>,int>>::iterator;
-	using incl_const_iter = std::vector<std::pair<Inclusion<NFA>,int>>::const_iterator;
-
-	[[nodiscard]] auto getAcyclic() const -> const NFA & { return acyc; }
-
 	[[nodiscard]] auto getRecovery() const -> const NFA & { return rec; }
 
 	[[nodiscard]] auto getPPoRf() const -> const std::pair<NFA, bool> & { return pporf; }
 
-	auto save_begin() -> save_iter { return nsave.begin(); }
-	auto save_end() -> save_iter { return nsave.end(); }
-	[[nodiscard]] auto save_begin() const -> save_const_iter { return nsave.begin(); }
-	[[nodiscard]] auto save_end() const -> save_const_iter { return nsave.end(); }
+	auto save_begin() { return nsave.begin(); }
+	auto save_end() { return nsave.end(); }
+	[[nodiscard]] auto save_begin() const { return nsave.begin(); }
+	[[nodiscard]] auto save_end() const { return nsave.end(); }
 
-	// redc_iter redc_begin() { return nredc.begin(); }
-	// redc_iter redc_end() { return nredc.end(); }
-	// redc_const_iter redc_begin() const { return nredc.begin(); }
-	// redc_const_iter redc_end() const { return nredc.end(); }
+	auto incl_begin() { return nincl.begin(); }
+	auto incl_end() { return nincl.end(); }
+	[[nodiscard]] auto incl_begin() const { return nincl.begin(); }
+	[[nodiscard]] auto incl_end() const { return nincl.end(); }
 
-	auto incl_begin() -> incl_iter { return nincl.begin(); }
-	auto incl_end() -> incl_iter { return nincl.end(); }
-	[[nodiscard]] auto incl_begin() const -> incl_const_iter { return nincl.begin(); }
-	[[nodiscard]] auto incl_end() const -> incl_const_iter { return nincl.end(); }
+	auto acyc_begin() { return acyc.begin(); }
+	auto acyc_end() { return acyc.end(); }
+	auto acycs() { return std::ranges::ref_view(acyc); }
+	[[nodiscard]] auto acyc_begin() const { return acyc.begin(); }
+	[[nodiscard]] auto acyc_end() const { return acyc.end(); }
+	[[nodiscard]] auto acycs() const { return std::ranges::ref_view(acyc); }
 
-	void addAcyclic(NFA &&a) { acyc.alt(std::move(a)); }
+	void addAcyclic(NFA &&a, std::string genmc = {}, std::optional<NFA> unless = std::nullopt)
+	{
+		acyc.emplace_back(std::move(a), std::move(genmc), std::move(unless));
+	}
 
 	void addRecovery(NFA &&a) { rec.alt(std::move(a)); }
 
-	void addPPoRf(NFA &&ppo, bool deps = false) { pporf = std::make_pair(std::move(ppo), deps); }
+	void addPPoRf(NFA &&ppo, bool deps = false)
+	{
+		pporf = std::make_pair(std::move(ppo), deps);
+	}
 
 	void addSaved(NFA &&save) { nsave.emplace_back(std::move(save), VarStatus::Normal); }
 
@@ -73,7 +75,10 @@ public:
 
 	void addView(NFA &&view) { nsave.emplace_back(std::move(view), VarStatus::View); }
 
-	void addInclusion(std::pair<Inclusion<NFA>, int> &&incl) { nincl.push_back(std::move(incl)); }
+	void addInclusion(std::pair<Inclusion<NFA>, int> &&incl)
+	{
+		nincl.push_back(std::move(incl));
+	}
 
 	void setCohIndex(int idx) { cohIndex = idx; }
 	[[nodiscard]] auto getCohIndex() const -> int { return cohIndex; }
@@ -85,12 +90,14 @@ public:
 	void setDepTracking(bool dt) { depTracking = dt; }
 
 private:
-	NFA acyc;
+	std::vector<std::tuple<NFA, std::string, std::optional<NFA>>>
+		acyc; // opt: possible unless clause
 	NFA rec;
 	std::pair<NFA, bool> pporf; // 1 -> deps
 	std::vector<std::pair<NFA, VarStatus>> nsave;
 	// std::vector<NFA> nredc;
-	std::vector<std::pair<Inclusion<NFA>, int>> nincl; // index of rhs view; -1 if none ** FIXME **
+	std::vector<std::pair<Inclusion<NFA>, int>>
+		nincl; // index of rhs view; -1 if none ** FIXME **
 
 	int cohIndex = -1;
 	int hbIndex = -1;

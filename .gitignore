@@ -38,3 +38,13 @@ stamp-*
 ylwrap
 compile_commands.json
 .cache
+
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+Testing
+Makefile
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake

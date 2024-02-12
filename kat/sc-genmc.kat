@@ -1,3 +1,28 @@
-let sc = (po | rf | mo | fr)
+let ppo = po
+let sc = (ppo | rf | mo | fr | tc | tj)
 
-acyclic sc
+view hb_stable = (po-imm | (rf | tc | tj) ; po-imm)+
+export coherence (hb_stable)
+
+export acyclic sc
+
+// ---------------------------------------------------------------------
+// SC error detection
+// ---------------------------------------------------------------------
+
+let ww_conflict = [W] ; loc-overlap ; [W]
+let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
+let conflicting = ww_conflict | wr_conflict
+let na_conflict = [NA] ; conflicting | conflicting ; [NA]
+view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+
+export error VE_AccessNonMalloc unless  alloc <= hb_stable
+export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0
+
+export error VE_AccessFreed     unless  alloc^-1? ; free ; [FREE] <= hb_stable
+export error VE_AccessFreed     unless  [FREE] ; free^-1 ; alloc = 0
+export error VE_AccessFreed     unless  [NOTHPPROT] ; alloc^-1? ; free ; [HPRET] <= hb_stable
+export error VE_AccessFreed     unless  [HPRET] ; free^-1 ; alloc ; [NOTHPPROT] = 0
+
+export error VE_RaceNotAtomic   unless  na_conflict <= hb_stable
+export warning VE_WWRace        unless  ww_conflict <= porf_stable

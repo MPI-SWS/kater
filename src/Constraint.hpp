@@ -30,42 +30,34 @@
 class Constraint : public VisitableContainer {
 
 public:
-	enum class Type { Consistency, Error, Warning };
-
 	using ValidFunT = std::function<bool(const TransLabel &)>;
 
+	// TODO: Remove
+	enum class Type { Consistency, Error, Warning };
+
 protected:
-	Constraint(std::vector<std::unique_ptr<RegExp> > &&kids = {})
-		: kids(std::move(kids)) {}
+	Constraint(std::vector<std::unique_ptr<RegExp>> &&kids = {}) : kids(std::move(kids)) {}
 
 public:
 	virtual ~Constraint() = default;
 
-	static auto createEmpty(std::unique_ptr<RegExp> e) -> std::unique_ptr<Constraint>;
-
-	static auto
-	createEquality(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2) -> std::unique_ptr<Constraint>;
-
 	[[nodiscard]] auto isEmpty() const -> bool;
 
-	/* Returns the constraint type */
-	[[nodiscard]] auto getType() const -> Type { return type; }
-
-	/* Sets the constraint type to T */
-	void setType(Type t) { type = t; }
-
 	/* Fetches the i-th kid */
-	[[nodiscard]] auto getKid(unsigned i) const -> const RegExp * {
+	[[nodiscard]] auto getKid(unsigned i) const -> const RegExp *
+	{
 		assert(i < kids.size() && "Index out of bounds!");
 		return kids[i].get();
 	}
-	auto getKid(unsigned i) -> std::unique_ptr<RegExp> & {
+	auto getKid(unsigned i) -> std::unique_ptr<RegExp> &
+	{
 		assert(i < kids.size() && "Index out of bounds!");
 		return kids[i];
 	}
 
 	/* Sets the i-th kid to e */
-	void setKid(unsigned i, std::unique_ptr<RegExp> e) {
+	void setKid(unsigned i, std::unique_ptr<RegExp> e)
+	{
 		assert(i < getNumKids() && "Index out of bounds!");
 		kids[i] = std::move(e);
 	}
@@ -85,85 +77,25 @@ public:
 protected:
 	using KidsC = std::vector<std::unique_ptr<RegExp>>;
 
-	[[nodiscard]] auto getKids() const -> const KidsC & {
-		return kids;
-	}
+	[[nodiscard]] auto getKids() const -> const KidsC & { return kids; }
 
-	void addKid(std::unique_ptr<RegExp> k) {
-		kids.push_back(std::move(k));
-	}
+	void addKid(std::unique_ptr<RegExp> k) { kids.push_back(std::move(k)); }
+
+	static auto createEmpty(std::unique_ptr<RegExp> e, bool sameEnds)
+		-> std::unique_ptr<Constraint>;
 
 	[[nodiscard]] auto isContainer() const -> bool override { return false; }
 
 	void visitChildren(BaseVisitor &visitor) const override {}
 
 private:
-	Type type = Type::Consistency;
 	KidsC kids;
 };
 
-inline auto operator<<(std::ostream &s, Constraint::Type t) -> std::ostream &
+inline auto operator<<(std::ostream &s, const Constraint &re) -> std::ostream &
 {
-	switch (t) {
-	case Constraint::Type::Consistency:
-		return s << "consistency";
-	case Constraint::Type::Error:
-		return s << "error";
-	case Constraint::Type::Warning:
-		return s << "warning";
-	default:
-		return s << "UKNOWN";
-	}
-	return s;
-}
-
-inline auto operator<<(std::ostream &s, const Constraint& re) -> std::ostream &
-{
-	s << "[" <<re.getType() << "] ";
 	return re.dump(s);
 }
-
-/*******************************************************************************
- **                           Conjunctive Constraints
- ******************************************************************************/
-
-class ConjunctiveConstraint : public Constraint {
-
-protected:
-	ConjunctiveConstraint(std::unique_ptr<Constraint> c1,
-			      std::unique_ptr<Constraint> c2)
-		:  constraint1(std::move(c1)), constraint2(std::move(c2)) {}
-
-public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<ConjunctiveConstraint> {
-		return std::unique_ptr<ConjunctiveConstraint>(
-			new ConjunctiveConstraint(std::forward<Ts>(params)...));
-	}
-
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override {
-		return create(constraint1->clone(), constraint2->clone());
-	}
-
-	auto dump(std::ostream &s) const -> std::ostream & override {
-		return s << "(" << *constraint1 << " && " << *constraint2 << ")";
-	}
-
-	[[nodiscard]] auto getConstraint1() const -> const Constraint * { return constraint1.get(); }
-	[[nodiscard]] auto getConstraint2() const -> const Constraint * { return constraint2.get(); }
-
-private:
-	[[nodiscard]] auto isContainer() const -> bool override { return true; }
-
-	void visitChildren(BaseVisitor &visitor) const override {
-		visitor(*getConstraint1());
-		visitor(*getConstraint2());
-	}
-
-	std::unique_ptr<Constraint> constraint1;
-	std::unique_ptr<Constraint> constraint2;
-};
-
 
 /*******************************************************************************
  **                           Acyclicity Constraints
@@ -172,23 +104,131 @@ private:
 class AcyclicConstraint : public Constraint {
 
 protected:
-	AcyclicConstraint(std::unique_ptr<RegExp> e)  { addKid(std::move(e)); }
+	AcyclicConstraint(std::unique_ptr<RegExp> e, std::unique_ptr<Constraint> o,
+			  std::string info)
+		: constraint_(std::move(o)), printInfo_(std::move(info))
+	{
+		addKid(std::move(e));
+	}
 
 public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<AcyclicConstraint> {
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<AcyclicConstraint>
+	{
 		return std::unique_ptr<AcyclicConstraint>(
 			new AcyclicConstraint(std::forward<Ts>(params)...));
 	}
 
 	/* NOTE: Might not return AcyclicConstraint */
-	static auto createOpt(std::unique_ptr<RegExp> re) -> std::unique_ptr<Constraint>;
+	static auto createOpt(std::unique_ptr<RegExp> re, std::unique_ptr<Constraint> o,
+			      std::string info) -> std::unique_ptr<Constraint>;
 
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override { return create(getKid(0)->clone()); }
+	[[nodiscard]] auto getConstraint() const -> const Constraint * { return constraint_.get(); }
 
-	auto dump(std::ostream &s) const -> std::ostream & override { return s << "acyclic" << *getKid(0); }
+	[[nodiscard]] auto getPrintInfo() const -> const std::string & { return printInfo_; }
+
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
+		return create(getKid(0)->clone(),
+			      getConstraint() ? getConstraint()->clone() : nullptr, getPrintInfo());
+	}
+
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
+		return s << "acyclic" << *getKid(0);
+	}
+
+private:
+	std::unique_ptr<Constraint> constraint_{};
+	std::string printInfo_;
 };
 
+/*******************************************************************************
+ **                           Error Constraint
+ ******************************************************************************/
+
+class ErrorConstraint : public Constraint {
+
+protected:
+	ErrorConstraint(std::unique_ptr<Constraint> cst, std::string name)
+		: constraint_(std::move(cst)), name_(std::move(name))
+	{
+	}
+
+public:
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<ErrorConstraint>
+	{
+		return std::unique_ptr<ErrorConstraint>(
+			new ErrorConstraint(std::forward<Ts>(params)...));
+	}
+
+	/* NOTE: Might not return ErrorConstraint */
+	static auto createOpt(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2,
+			      std::string name) -> std::unique_ptr<Constraint>;
+
+	[[nodiscard]] auto getName() const -> const std::string & { return name_; }
+
+	[[nodiscard]] auto getConstraint() const -> const Constraint * { return constraint_.get(); }
+
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
+		return create(getConstraint()->clone(), getName());
+	}
+
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
+		return s << "error(" << getName() << "): " << *getConstraint() << "\n";
+	}
+
+private:
+	std::unique_ptr<Constraint> constraint_;
+	std::string name_;
+};
+
+/*******************************************************************************
+ **                           Warning Constraint
+ ******************************************************************************/
+
+class WarningConstraint : public Constraint {
+
+protected:
+	WarningConstraint(std::unique_ptr<Constraint> cst, std::string name)
+		: constraint_(std::move(cst)), name_(std::move(name))
+	{
+	}
+
+public:
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<WarningConstraint>
+	{
+		return std::unique_ptr<WarningConstraint>(
+			new WarningConstraint(std::forward<Ts>(params)...));
+	}
+
+	/* NOTE: Might not return WarningConstraint */
+	static auto createOpt(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2,
+			      std::string name) -> std::unique_ptr<Constraint>;
+
+	[[nodiscard]] auto getName() const -> const std::string & { return name_; }
+
+	[[nodiscard]] auto getConstraint() const -> const Constraint * { return constraint_.get(); }
+
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
+		return create(getConstraint()->clone(), getName());
+	}
+
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
+		return s << "warning(" << getName() << "): " << *getKid(0) << " <= " << *getKid(1)
+			 << "\n";
+	}
+
+private:
+	std::unique_ptr<Constraint> constraint_;
+	std::string name_;
+};
 
 /*******************************************************************************
  **                           Recovery Constraints
@@ -197,20 +237,26 @@ public:
 class RecoveryConstraint : public Constraint {
 
 protected:
-	RecoveryConstraint(std::unique_ptr<RegExp> e)  { addKid(std::move(e)); }
+	RecoveryConstraint(std::unique_ptr<RegExp> e) { addKid(std::move(e)); }
 
 public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<RecoveryConstraint> {
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<RecoveryConstraint>
+	{
 		return std::unique_ptr<RecoveryConstraint>(
 			new RecoveryConstraint(std::forward<Ts>(params)...));
 	}
 
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override { return create(getKid(0)->clone()); }
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
+		return create(getKid(0)->clone());
+	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override { return s << "recovery" << *getKid(0); }
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
+		return s << "recovery" << *getKid(0);
+	}
 };
-
 
 /*******************************************************************************
  **                           Coherence Constraints
@@ -219,11 +265,12 @@ public:
 class CoherenceConstraint : public Constraint {
 
 protected:
-	CoherenceConstraint(std::unique_ptr<RegExp> e)  { addKid(std::move(e)); }
+	CoherenceConstraint(std::unique_ptr<RegExp> e) { addKid(std::move(e)); }
 
 public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<CoherenceConstraint> {
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<CoherenceConstraint>
+	{
 		return std::unique_ptr<CoherenceConstraint>(
 			new CoherenceConstraint(std::forward<Ts>(params)...));
 	}
@@ -231,11 +278,16 @@ public:
 	/* NOTE: Might not return AcyclicConstraint */
 	static auto createOpt(std::unique_ptr<RegExp> re) -> std::unique_ptr<Constraint>;
 
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override { return create(getKid(0)->clone()); }
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
+		return create(getKid(0)->clone());
+	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override { return s << "coherence " << *getKid(0); }
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
+		return s << "coherence " << *getKid(0);
+	}
 };
-
 
 /*******************************************************************************
  **                           Subset Constraints
@@ -244,18 +296,24 @@ public:
 class SubsetConstraint : public Constraint {
 
 protected:
-	SubsetConstraint(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2)
-		 { addKid(std::move(e1)); addKid(std::move(e2)); }
+	SubsetConstraint(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2, bool sameEnds_)
+		: sameEnds_(sameEnds_)
+	{
+		addKid(std::move(e1));
+		addKid(std::move(e2));
+	}
+
 public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<SubsetConstraint> {
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<SubsetConstraint>
+	{
 		return std::unique_ptr<SubsetConstraint>(
 			new SubsetConstraint(std::forward<Ts>(params)...));
 	}
 
 	/* NOTE: Might not return SubsetConstraint */
-	static auto
-	createOpt(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2) -> std::unique_ptr<Constraint>;
+	static auto createOpt(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2, bool sameEnds)
+		-> std::unique_ptr<Constraint>;
 
 	[[nodiscard]] auto getLHS() const -> const RegExp * { return getKid(0); }
 	auto getLHS() -> RegExp * { return getKid(0).get(); }
@@ -263,51 +321,64 @@ public:
 	[[nodiscard]] auto getRHS() const -> const RegExp * { return getKid(1); }
 	auto getRHS() -> RegExp * { return getKid(1).get(); }
 
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override {
-		return create(getKid(0)->clone(), getKid(1)->clone());
+	[[nodiscard]] auto sameEnds() const -> bool { return sameEnds_; }
+
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
+		return create(getKid(0)->clone(), getKid(1)->clone(), sameEnds_);
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override {
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
 		return s << *getKid(0) << " <= " << *getKid(1);
 	}
-};
 
+private:
+	bool sameEnds_{};
+};
 
 /*******************************************************************************
- **                           SubsetSameEnds Constraint
+ **                           Equality Constraint
  ******************************************************************************/
 
-class SubsetSameEndsConstraint : public Constraint {
+/*
+ * An EqualityConstraint is a SubsetConstraint that holds both ways
+ */
+class EqualityConstraint : public SubsetConstraint {
 
 protected:
-	SubsetSameEndsConstraint(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2)
-		 { addKid(std::move(e1)); addKid(std::move(e2)); }
+	EqualityConstraint(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2, bool sameEndsLHS)
+		: SubsetConstraint(std::move(e1), std::move(e2), sameEndsLHS)
+	{
+	}
+
 public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<SubsetSameEndsConstraint> {
-		return std::unique_ptr<SubsetSameEndsConstraint>(
-			new SubsetSameEndsConstraint(std::forward<Ts>(params)...));
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<EqualityConstraint>
+	{
+		return std::unique_ptr<EqualityConstraint>(
+			new EqualityConstraint(std::forward<Ts>(params)...));
 	}
 
-	/* NOTE: Might not return SubsetSameEndsConstraint */
-	static auto
-	createOpt(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2) -> std::unique_ptr<Constraint>;
+	static auto createOpt(std::unique_ptr<RegExp> e1, std::unique_ptr<RegExp> e2, bool sameEnds)
+		-> std::unique_ptr<Constraint>;
 
-	[[nodiscard]] auto getLHS() const -> const RegExp * { return getKid(0); }
-	auto getLHS() -> RegExp * { return getKid(0).get(); }
-
-	[[nodiscard]] auto getRHS() const -> const RegExp * { return getKid(1); }
-	auto getRHS() -> RegExp * { return getKid(1).get(); }
-
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override {
-		return create(getKid(0)->clone(), getKid(1)->clone());
+	auto flip() -> EqualityConstraint &
+	{
+		std::swap(getKid(0), getKid(1));
+		return *this;
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override {
-		return s << *getKid(0) << " <=&id " << *getKid(1);
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
+		return create(getKid(0)->clone(), getKid(1)->clone(), sameEnds());
+	}
+
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
+		return s << *getKid(0) << " = " << *getKid(1) << "\n";
 	}
 };
-
 
 /*******************************************************************************
  **                           Totality Constraint
@@ -316,63 +387,32 @@ public:
 class TotalityConstraint : public Constraint {
 
 protected:
-	TotalityConstraint(std::unique_ptr<RegExp> e)
-		 { addKid(std::move(e)); }
+	TotalityConstraint(std::unique_ptr<RegExp> e) { addKid(std::move(e)); }
+
 public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<TotalityConstraint> {
+	template <typename... Ts>
+	static auto create(Ts &&...params) -> std::unique_ptr<TotalityConstraint>
+	{
 		return std::unique_ptr<TotalityConstraint>(
 			new TotalityConstraint(std::forward<Ts>(params)...));
 	}
 
-	static auto
-	createOpt(std::unique_ptr<RegExp> e) -> std::unique_ptr<Constraint> {
+	static auto createOpt(std::unique_ptr<RegExp> e) -> std::unique_ptr<Constraint>
+	{
 		return create(std::move(e));
 	}
 
 	[[nodiscard]] auto getRelation() const -> const RegExp * { return getKid(0); }
 	auto getRelation() -> RegExp * { return getKid(0).get(); }
 
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override {
+	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override
+	{
 		return create(getKid(0)->clone());
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override {
+	auto dump(std::ostream &s) const -> std::ostream & override
+	{
 		return s << "total " << *getKid(0);
-	}
-};
-
-
-/*******************************************************************************
- **                           Transitivity Constraint
- ******************************************************************************/
-
-class TransitivityConstraint : public Constraint {
-
-protected:
-	TransitivityConstraint(std::unique_ptr<RegExp> e)
-		 { addKid(std::move(e)); }
-public:
-	template<typename... Ts>
-	static auto create(Ts&&... params) -> std::unique_ptr<TransitivityConstraint> {
-		return std::unique_ptr<TransitivityConstraint>(
-			new TransitivityConstraint(std::forward<Ts>(params)...));
-	}
-
-	static auto
-	createOpt(std::unique_ptr<RegExp> e) -> std::unique_ptr<Constraint> {
-		return create(std::move(e));
-	}
-
-	[[nodiscard]] auto getRelation() const -> const RegExp * { return getKid(0); }
-	auto getRelation() -> RegExp * { return getKid(0).get(); }
-
-	[[nodiscard]] auto clone() const -> std::unique_ptr<Constraint> override {
-		return create(getKid(0)->clone());
-	}
-
-	auto dump(std::ostream &s) const -> std::ostream & override {
-		return s << "transitive " << *getKid(0);
 	}
 };
 

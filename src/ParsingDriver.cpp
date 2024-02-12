@@ -17,60 +17,33 @@
  */
 
 #include "ParsingDriver.hpp"
+
+#include "Builtins.hpp"
+
 #include <cstring>
 #include <fstream>
 #include <iostream>
 
 #define DEBUG_TYPE "parser"
 
-extern FILE* yyin;
+extern FILE *yyin;
 extern void yyrestart(FILE *);
 
-ParsingDriver::ParsingDriver() : module(new KatModule)
-{
-	/* Basic predicates */
-	std::for_each(PredicateSet::builtin_begin(), PredicateSet::builtin_end(), [this](auto &pi){
-		registerBuiltinID(pi.second.name, CharRE::create(
-					  TransLabel(std::nullopt,
-						     PredicateSet(pi.first))));
-	});
+ParsingDriver::ParsingDriver() : module(new KatModule) { registerBuiltins(*module); }
 
-	/* Basic relations */
-	std::for_each(Relation::builtin_begin(), Relation::builtin_end(), [this](auto &ri){
-		registerBuiltinID(ri.second.name, CharRE::create(
-					  TransLabel(Relation::createBuiltin(ri.first))));
-	});
-
-	/* Default relations */
-	registerBuiltinID("po", PlusRE::createOpt(module->getRegisteredID("po-imm")));
-	registerBuiltinID("addr", PlusRE::createOpt(module->getRegisteredID("addr-imm")));
-	registerBuiltinID("data", PlusRE::createOpt(module->getRegisteredID("data-imm")));
-	registerBuiltinID("ctrl", SeqRE::createOpt(module->getRegisteredID("ctrl-imm"),
-						   StarRE::createOpt(module->getRegisteredID("po-imm"))));
-	registerBuiltinID("po-loc", PlusRE::createOpt(module->getRegisteredID("po-loc-imm")));
-	registerBuiltinID("mo", PlusRE::createOpt(module->getRegisteredID("mo-imm")));
-	registerBuiltinID("fr", SeqRE::createOpt(module->getRegisteredID("fr-imm"),
-						 StarRE::createOpt(module->getRegisteredID("mo"))));
-	registerBuiltinID("rmw", SeqRE::createOpt(module->getRegisteredID("UR"),
-						  module->getRegisteredID("po-imm"),
-						  module->getRegisteredID("UW")));
-}
-
-void ParsingDriver::saveState()
-{
-	states.emplace_back(getLocation(), yyin, dir, getPrefix());
-}
+void ParsingDriver::saveState() { states.emplace_back(getLocation(), yyin, dir, getPrefix()); }
 
 void ParsingDriver::restoreState()
 {
-	if (!states.empty()) {
-		auto &s = states.back();
-		yyrestart(s.in);
-		location = s.loc;
-		dir = s.dir;
-		prefix = s.prefix;
-		states.pop_back();
-	}
+	if (states.empty())
+		return;
+
+	auto &s = states.back();
+	yyrestart(s.in);
+	location = s.loc;
+	dir = s.dir;
+	prefix = s.prefix;
+	states.pop_back();
 }
 
 auto ParsingDriver::parse(const std::string &name) -> int
@@ -84,18 +57,17 @@ auto ParsingDriver::parse(const std::string &name) -> int
 
 	auto path = dir + name;
 	if ((yyin = fopen(path.c_str(), "r")) == nullptr) {
-		std::cerr << "cannot open " << path
-			  << ": " << strerror(errno) << std::endl;
+		std::cerr << "cannot open " << path << ": " << strerror(errno) << std::endl;
 		exit(EXIT_FAILURE);
 	}
 
 	auto s = path.find_last_of("/");
-	dir = path.substr(0, s != std::string::npos ? s+1 : std::string::npos);
+	dir = path.substr(0, s != std::string::npos ? s + 1 : std::string::npos);
 
 	auto d = path.find_last_of(".");
-	prefix = path.substr(s != std::string::npos ? s+1 : 0,
-			     d == std::string::npos ? std::string::npos :
-			     (s != std::string::npos ? d-s-1 : d-1));
+	prefix = path.substr(s != std::string::npos ? s + 1 : 0,
+			     d == std::string::npos ? std::string::npos
+						    : (s != std::string::npos ? d - s - 1 : d - 1));
 
 	yyrestart(yyin);
 	location.initialize(&path);

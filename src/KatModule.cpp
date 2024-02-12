@@ -23,21 +23,21 @@ std::ostream &operator<<(std::ostream &s, const KatModule::DbgInfo &dbg)
 	return s << dbg.filename << ":" << dbg.line;
 }
 
-void KatModule::addConstraint(const Constraint *c, const std::string &s, const yy::location &loc)
+void KatModule::registerExport(const Constraint *c, const yy::location &loc)
 {
-	if (dynamic_cast<const AcyclicConstraint *>(c) && c->getType() == Constraint::Type::Consistency)
-		acyclicityConstraints.push_back(c->getKid(0)->clone());
-	else if (dynamic_cast<const RecoveryConstraint *>(c) && c->getType() == Constraint::Type::Consistency)
+	if (dynamic_cast<const AcyclicConstraint *>(c))
+		acyclicityConstraints.push_back(c->clone());
+	else if (dynamic_cast<const RecoveryConstraint *>(c))
 		recoveryConstraints.push_back(c->getKid(0)->clone());
 	else if (dynamic_cast<const CoherenceConstraint *>(c))
 		coherenceConstraints.push_back(c->getKid(0)->clone());
-	else if (dynamic_cast<const SubsetConstraint *>(c))
-		inclusionConstraints.push_back({c->getKid(0)->clone(),
-					        c->getKid(1)->clone(), c->getType(), s});
-	else if (auto conj = dynamic_cast<const ConjunctiveConstraint *>(c)) {
-		addConstraint(conj->getConstraint1(), s, loc);
-		addConstraint(conj->getConstraint2(), s, loc);
+	else if (const auto *error = dynamic_cast<const ErrorConstraint *>(c))
+		inclusionConstraints.push_back(c->clone());
+	else if (const auto *conj = dynamic_cast<const WarningConstraint *>(c)) {
+		inclusionConstraints.push_back(c->clone());
 	} else {
-		std::cerr << loc << ": [Warning] Ignoring the unsupported constraint:" << *c << "\n";
+		std::cerr << loc << ": [Warning] Ignoring the unsupported constraint:" << *c
+			  << "\n";
+		exit(1);
 	}
 }

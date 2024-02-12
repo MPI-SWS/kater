@@ -1,8 +1,0 @@
-let hb1 = (po | rf)+
-let ra1 = (hb1;fr | hb1;mo | hb1)
-
-let hb2 = (po;[W] | [R];po | rfe)+
-let ra2 = (hb2;fr | hb2;mo | hb2 | po;fr)
-
-assert [R|W];ra1;[R|W] <=&id ra2
-assert ra2 <=&id ra1

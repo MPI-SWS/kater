@@ -21,13 +21,7 @@
 
 #include "NFA.hpp"
 
-/*
- * Saturates the NFA given a collection of predicate labels LABS s.t.
- * for all LAB \in LABS. LAB <= ID
- *
- * Pre: NFA is in normal form
- */
-void saturatePreds(NFA &nfa, const std::vector<TransLabel> &labs);
+class Theory;
 
 /*
  * Saturates the NFA by (1) conjuncting all outgoing
@@ -39,7 +33,7 @@ void saturatePreds(NFA &nfa, const std::vector<TransLabel> &labs);
  *
  * Pre: NFA is in normal form
  */
-void saturateInitFinalPreds(NFA &nfa);
+void saturateInitFinalPreds(NFA &nfa, const Theory &theory);
 
 /*
  * If all the preds/successors of a given relation R relation are
@@ -48,17 +42,19 @@ void saturateInitFinalPreds(NFA &nfa);
  *
  * Pre: NFA is in normal form
  */
-void saturateLoc(NFA &nfa);
+void saturateLoc(NFA &nfa, const Theory &theory);
 
 void saturateID(NFA &nfa, NFA &&id);
 
 void saturateTransitive(NFA &nfa, const Relation &rel);
 
+void saturateBuiltin(NFA &nfa, const Relation &rel, NFA sat, const Theory &theory);
+
 /*
  * Saturates the NFA given an NFA EMPTY that corresponds
  * to a relation R = 0
  */
-void saturateEmpty(NFA &nfa, NFA &&empty, const NFA &other);
+void saturateEmpty(NFA &nfa, NFA &&empty);
 
 /*
  * Saturates the NFA given a relation REL. total(REL)
@@ -71,11 +67,11 @@ void saturateTotal(NFA &nfa, const Relation &rel);
  * pre/post-checks of a label, the label is removed.)
  *
  */
-void saturateDomains(NFA &nfa);
+void saturateDomains(NFA &nfa, const Theory &theory);
 
 /*
  * Saturates the NFA by rotating it.
  */
-void saturateRotate(NFA &nfa);
+void saturateRotate(NFA &nfa, const Theory &theory);
 
 #endif /* KATER_SATURATION_HPP */

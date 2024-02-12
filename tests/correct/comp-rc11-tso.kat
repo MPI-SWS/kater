@@ -1,5 +1,0 @@
-include "../../kat/tso.kat"
-include "../../kat/rc11.kat"
-
-assume [W];po;[R] <= [W];po;[F];po;[R]
-assert rc11::psc+ <= tso::tso+

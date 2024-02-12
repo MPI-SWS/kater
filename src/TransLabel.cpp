@@ -1,4 +1,23 @@
+/*
+ * KATER -- Automating Weak Memory Model Metatheory
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, you can access it online at
+ * http://www.gnu.org/licenses/gpl-3.0.html.
+ */
+
 #include "TransLabel.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <iostream>
@@ -8,7 +27,7 @@
 #include <vector>
 
 auto TransLabel::merge(const TransLabel &other,
-		       const std::function<bool(const TransLabel &)>& isValid) -> bool
+		       const std::function<bool(const TransLabel &)> &isValid) -> bool
 {
 	if (!isValid(*this) || !isValid(other)) {
 		return false;
@@ -16,15 +35,12 @@ auto TransLabel::merge(const TransLabel &other,
 	if (!isPredicate() && !other.isPredicate()) {
 		return false;
 	}
-	if (!composesWith(other)) {
-		return false;
-	}
 
 	if (isPredicate()) {
 		/* Do not merge into THIS before ensuring combo is valid */
 		TransLabel t(*this);
 		t.getRelation() = other.getRelation();
-		t.getPreChecks().merge(other.getPreChecks());
+		t.getPreChecks().insert(other.getPreChecks());
 		assert(t.getPostChecks().empty());
 		t.getPostChecks() = other.getPostChecks();
 		if (isValid(t)) {
@@ -36,36 +52,11 @@ auto TransLabel::merge(const TransLabel &other,
 	assert(other.isPredicate());
 
 	TransLabel t(*this);
-	t.getPostChecks().merge(other.getPreChecks());
+	t.getPostChecks().insert(other.getPreChecks());
 	if (isValid(t)) {
 		*this = t;
 	}
 	return isValid(t);
-}
-
-auto TransLabel::composesWith(const TransLabel &other) const -> bool
-{
-	if (isPredicate() && other.isPredicate()) {
-		return getPreChecks().composes(other.getPreChecks());
-	}
-
-	if (!isPredicate() && other.isPredicate()) {
-		return getPostChecks().composes(other.getPreChecks()) &&
-			(!isBuiltin() || getRelation()->getCodomain().composes(other.getPreChecks()));
-	}
-
-	if (isPredicate() && !other.isPredicate()) {
-		return getPreChecks().composes(other.getPreChecks()) &&
-			(!other.isBuiltin() ||
-			 getPreChecks().composes(other.getRelation()->getDomain()));
-	}
-
-	return getPostChecks().composes(other.getPreChecks()) &&
-		(!isBuiltin() || (getRelation()->getCodomain().composes(other.getPreChecks()) &&
-				  (!other.isBuiltin() || getRelation()->getCodomain().composes(
-					  other.getRelation()->getDomain())))) &&
-		(!other.isBuiltin() ||
-		 getPostChecks().composes(other.getRelation()->getDomain()));
 }
 
 auto TransLabel::toString() const -> std::string

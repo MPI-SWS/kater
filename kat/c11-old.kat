@@ -9,7 +9,7 @@ let eco = (rf | mo | fr)+
 // RC11 Happens-before
 // ---------------------------------------------------------------------
 
-let sw = [REL] ; ([F] ; po)? ; rf ; (po ; [F])? ; [ACQ]
+let sw = [SC|REL] ; ([F] ; po)? ; rf ; (po ; [F])? ; [ACQ|SC]
 
 let hb = (po | sw)+
 

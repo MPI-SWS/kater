@@ -1,0 +1,10 @@
+// ------------------------------------------------------------
+// Declare a new relation B.
+relation A
+
+assume A <= A? // Trivial assumption.
+assume A? <= A // A is reflexive.
+
+// Should hold due to reflexivity
+// assert A & id <= id
+assert A? <= A

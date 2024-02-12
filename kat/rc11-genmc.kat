@@ -14,6 +14,8 @@ let loc = loc-overlap ^=
 
 let ppo = po
 
+view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+
 // Optimized calculation of synchronizes-with
 // Save the view of write messages
 
@@ -41,7 +43,7 @@ assert hb = (po | sw | asw)+
 // acyclic (po | rf)
 
 // Coherence : Optimize the checking of irreflexive (hb ; eco)
-coherence (hb_stable)
+export coherence (hb_stable)
 
 // RMW atomicity
 // check  mo-imm ; [UW] <= rf ; po-imm
@@ -57,29 +59,26 @@ let psc = [SC] ; po ; hb ; po ; [SC]
         | FSC ; hb ; FSC
         | FSC ; hb ; eco ; hb ; FSC
         | SC ; po ; SC
-acyclic psc
+export acyclic psc unless [SC] = 0
 
 // ---------------------------------------------------------------------
 // RC11 error detection
 // ---------------------------------------------------------------------
 
-let ww_conflict = [W] ; loc-overlap ; [W] // co
-let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W] //co?;rf | fr
+let ww_conflict = [W] ; loc-overlap ; [W]
+let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
 let conflicting = ww_conflict | wr_conflict
 let na_conflict = [NA] ; conflicting | conflicting ; [NA]
 
 // GenMC needs to handle the no-alloc case (access validity)
-error VE_UninitializedMem unless  [IR] = 0 // necessary for the case where there is no initializing write; fixme as IR & Dynamic?
-// perhaps [W]; loc-overlap; [DynR] <= hb_stable is better because it can be checked only once?
 
-// can all these be performed at event addition?
+export error VE_AccessNonMalloc unless  alloc <= hb_stable
+export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0
 
-error VE_AccessNonMalloc unless  alloc <= hb_stable
-error VE_DoubleFree      unless  [Free|HpRetire] ; loc-overlap ; [Free|HpRetire] = 0
-error VE_AccessFreed     unless  loc-overlap ; [Free] <= hb_stable
-error VE_AccessFreed     unless  [Free] ; loc-overlap = 0 // new rels: free; alloc
-// error VE_AccessFreed     unless  [NotHpProtected] ; loc-overlap ; [HpRetire] <= hb_stable
-// error VE_AccessFreed     unless  [HpRetire] ; loc-overlap ; [NotHpProtected] = 0
+export error VE_AccessFreed     unless  alloc^-1? ; free ; [FREE] <= hb_stable
+export error VE_AccessFreed     unless  [FREE] ; free^-1 ; alloc = 0
+export error VE_AccessFreed     unless  [NOTHPPROT] ; alloc^-1? ; free ; [HPRET] <= hb_stable
+export error VE_AccessFreed     unless  [HPRET] ; free^-1 ; alloc ; [NOTHPPROT] = 0
 
-error VE_RaceNotAtomic     unless  na_conflict <= hb_stable
-// warning WWRace          unless  ww_conflict <= hb_stable
+export error VE_RaceNotAtomic   unless  na_conflict <= hb_stable
+export warning VE_WWRace        unless  ww_conflict <= porf_stable // hb_stable

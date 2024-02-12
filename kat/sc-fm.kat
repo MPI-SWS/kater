@@ -1,4 +1,4 @@
-declare to
+relation to
 
 let hb = (po | rf)+
 

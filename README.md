@@ -33,34 +33,34 @@ please issue the following command:
 
 #### Dependencies
 
-To use Kater you need a C++17 compiler, GNU autotools, flex (>= 2.6.4)
+To use Kater you need a C++20 compiler, cmake, flex (>= 2.6.4)
 and bison (>= 3.7.5) . On a Debian-based installation, the necessary
 dependencies are met by installing the following packages:
 
-	autoconf automake g++ flex bison
+	cmake make g++ flex bison
 
 #### Installing
 
-For a default build issue:
+For a release build issue:
 
-		autoreconf --install
-		./configure
-		make
+		mkdir Release
+		cmake -DCMAKE_BUILD_TYPE=Release -B Release -S .
+		cmake --build Release
 
-This will leave the `kater` executable in the `src` directory.
+This will leave the `kater` executable in the `Release` directory.
 You can either run it from there (as in the examples below), or issue
-`make install`.
+`cmake --install`.
 
 <a name="usage">Usage</a>
 -------------------------
 
 * To see a list of available options run:
 
-		./src/kater --help
+		./Release/kater --help
 
 * To run a particular test run:
 
-		./src/kater [options] <file>
+		./Release/kater [options] <file>
 
 <!-- * For more detailed usage examples please refer to the [manual](doc/manual.pdf). -->
 

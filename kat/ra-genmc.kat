@@ -1,0 +1,58 @@
+// ---------------------------------------------------------------------
+// Happens-before
+// ---------------------------------------------------------------------
+
+let ppo = po
+
+// Optimized calculation of synchronizes-with
+// Save the view of write messages
+
+let relseq = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)*
+let sw_to_r = relseq ; rf ; [ACQ]
+let sw_to_f = relseq ; rf ; po ; [F|TJ|TB] ; [ACQ]
+let sw = sw_to_r | sw_to_f
+let asw = tc | tj
+
+assert sw = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F|TJ|TB])? ; [ACQ]
+
+// Optimized calculation of happens-before.
+// Save the part of `hb` that does not finish with a reads-from edge
+
+view hb_stable = (po-imm | (sw_to_r | asw) ; po-imm | sw_to_f)+
+let hb = (hb_stable | hb_stable? ; (sw_to_r | asw))
+
+assert hb = (po | sw | asw)+
+
+// ---------------------------------------------------------------------
+// RA Consistency axioms
+// ---------------------------------------------------------------------
+
+// No load buffering
+// acyclic (po | rf)
+
+// Coherence : Optimize the checking of irreflexive (hb ; eco)
+export coherence (hb_stable)
+
+
+// ---------------------------------------------------------------------
+// RA error detection
+// ---------------------------------------------------------------------
+
+let ww_conflict = [W] ; loc-overlap ; [W]
+let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
+let conflicting = ww_conflict | wr_conflict
+let na_conflict = [NA] ; conflicting | conflicting ; [NA]
+view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+
+// GenMC needs to handle the no-alloc case (access validity)
+
+export error VE_AccessNonMalloc unless  alloc <= hb_stable
+export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0
+
+export error VE_AccessFreed     unless  alloc^-1? ; free ; [FREE] <= hb_stable
+export error VE_AccessFreed     unless  [FREE] ; free^-1 ; alloc = 0
+export error VE_AccessFreed     unless  [NOTHPPROT] ; alloc^-1? ; free ; [HPRET] <= hb_stable
+export error VE_AccessFreed     unless  [HPRET] ; free^-1 ; alloc ; [NOTHPPROT] = 0
+
+export error VE_RaceNotAtomic   unless  na_conflict <= hb_stable
+export warning VE_WWRace        unless  ww_conflict <= porf_stable

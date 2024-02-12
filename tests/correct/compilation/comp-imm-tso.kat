@@ -1,0 +1,4 @@
+include "../../../kat/imm.kat"
+include "../../../kat/tso.kat"
+
+assert imm::psc <= tso::tso*

@@ -31,19 +31,20 @@
 #include <utility>
 #include <vector>
 
-#define YY_DECL yy::parser::symbol_type yylex (ParsingDriver& drv)
+#define YY_DECL yy::parser::symbol_type yylex(ParsingDriver &drv)
 YY_DECL;
 
 class ParsingDriver {
 
 private:
 	struct State {
-		State(yy::location loc, FILE* in,
-		      std::string dir, std::string prefix)
-			: loc(loc), in(in), dir(std::move(dir)), prefix(std::move(prefix)) {}
+		State(yy::location loc, FILE *in, std::string dir, std::string prefix)
+			: loc(loc), in(in), dir(std::move(dir)), prefix(std::move(prefix))
+		{
+		}
 
 		yy::location loc;
-		FILE* in;
+		FILE *in;
 		std::string dir;
 		std::string prefix;
 	};
@@ -57,23 +58,39 @@ public:
 
 	[[nodiscard]] auto getPrefix() const -> const std::string & { return prefix; }
 
-	[[nodiscard]] auto getQualifiedName(const std::string &id) const -> std::string {
+	[[nodiscard]] auto getQualifiedName(const std::string &id) const -> std::string
+	{
 		return getPrefix() + "::" + id;
 	}
-	[[nodiscard]] static std::string getUnqualifiedName(const std::string &id) {
+	[[nodiscard]] static std::string getUnqualifiedName(const std::string &id)
+	{
 		auto c = id.find_last_of(':');
-		return id.substr(c != std::string::npos ? c+1 : c, std::string::npos);
+		return id.substr(c != std::string::npos ? c + 1 : c, std::string::npos);
 	}
 
-	void registerBuiltinID(const std::string& id, URE re) {
-		module->registerID(id, std::move(re));
+	void registerRelation(const std::string &id)
+	{
+		RelationInfo info;
+		info.name = getQualifiedName(id);
+		module->registerRelation(Relation::createUser(), std::move(info));
 	}
 
-	void registerID(const std::string& id, URE re) {
-		module->registerID(getQualifiedName(id), std::move(re));
+	void registerPredicate(const std::string &id, const std::string &printID)
+	{
+		PredicateInfo info;
+		info.name = getQualifiedName(id);
+		info.genmc = printID;
+		module->registerPredicate(Predicate::createUser(), std::move(info));
 	}
 
-	void registerSaveID(const std::string& idSave, const std::string& idRed, URE re, const yy::location &loc) {
+	void registerDerived(const std::string &id, URE re)
+	{
+		module->registerDerived(getQualifiedName(id), std::move(re));
+	}
+
+	void registerSaveDerived(const std::string &idSave, const std::string &idRed, URE re,
+				 const yy::location &loc)
+	{
 		if (!idRed.empty() && idRed != idSave && !isAllowedReduction(idRed)) {
 			std::cerr << loc << ": ";
 			std::cerr << "forbidden reduction encountered \"" << idRed << "\"\n";
@@ -90,32 +107,40 @@ public:
 				getRegisteredID(rname, loc); // ensure exists
 			}
 
-			module->registerSaveReducedID(getQualifiedName(idSave), rname, std::move(re));
+			module->registerSaveReduceDerived(getQualifiedName(idSave), rname,
+							  std::move(re));
 		} else {
-			module->registerSaveID(getQualifiedName(idSave), std::move(re));
+			module->registerSaveDerived(getQualifiedName(idSave), std::move(re));
 		}
 	}
 
-	void registerViewID(const std::string& id, URE re) {
-		module->registerViewID(getQualifiedName(id), std::move(re));
+	void registerViewDerived(const std::string &id, URE re)
+	{
+		module->registerViewDerived(getQualifiedName(id), std::move(re));
 	}
 
 	// Handle "assert c" declaration in the input file
-	void registerAssert(UCO c, const yy::location &loc) {
+	void registerAssert(UCO c, const yy::location &loc)
+	{
 		module->registerAssert(std::move(c), loc);
 	}
 
 	// Handle "assume c" declaration in the input file
-	void registerAssume(UCO c, const yy::location & /*loc*/) {
-		module->registerAssume(std::move(c));
+	void registerAssume(UCO c, const yy::location & /*loc*/)
+	{
+		module->getTheory().registerAssume(std::move(c));
+	}
+
+	void registerDisjointPreds(VSet<Predicate::ID> disjoint)
+	{
+		module->getTheory().registerDisjointPreds(std::move(disjoint));
 	}
 
 	// Handle consistency constraint in the input file
-	void addConstraint(UCO c, const std::string &s, const yy::location &loc) {
-		module->addConstraint(&*c, s, loc);
-	}
+	void registerExport(UCO c, const yy::location &loc) { module->registerExport(&*c, loc); }
 
-	auto getRegisteredID(const std::string& id, const yy::location &loc) -> URE {
+	auto getRegisteredID(const std::string &id, const yy::location &loc) -> URE
+	{
 		auto e = module->getRegisteredID(getQualifiedName(id));
 		if (!e) {
 			auto f = module->getRegisteredID(id);
@@ -129,13 +154,30 @@ public:
 		return std::move(e);
 	}
 
+	auto getRegisteredIDAsPredicate(const std::string &id, const yy::location &loc) -> Predicate
+	{
+		auto p = getRegisteredID(id, loc);
+		if (!p->isPredicate()) {
+			std::cerr << loc << ": ";
+			std::cerr << "non-basic predicate used in disjoint clause (" << id << ")\n";
+			exit(EXIT_FAILURE);
+		}
+		auto *charRE = dynamic_cast<CharRE *>(&*p);
+		auto &lab = charRE->getLabel();
+		assert(!lab.hasPostChecks());
+		assert(lab.isPredicate());
+		assert(lab.getPreChecks().size() == 1);
+		return *charRE->getLabel().getPreChecks().begin();
+	}
+
 	/* Invoke the parser on INPUT. Return 0 on success. */
 	auto parse(const std::string &input) -> int;
 
 	auto takeModule() -> std::unique_ptr<KatModule> { return std::move(module); }
 
 private:
-	auto isAllowedReduction(const std::string &idRed) -> bool const {
+	static auto isAllowedReduction(const std::string &idRed) -> bool
+	{
 		auto id = getUnqualifiedName(idRed);
 		return id == "po" || id == "po-loc" || id == "po-imm";
 	}

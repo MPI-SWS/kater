@@ -1,0 +1,3 @@
+relation n
+
+assert n;n <= n

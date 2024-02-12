@@ -1,0 +1,2 @@
+assert [R;W] = 0
+assert [R;ACQ];[R;RLX] = 0

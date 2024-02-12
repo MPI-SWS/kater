@@ -28,8 +28,9 @@ struct Config {
 
 	bool debug;
 	std::string debugOnly;
-        int verbose;
+	int verbose;
 	bool generate;
+	bool parallel;
 	std::string name;
 	std::string dir;
 	std::string inputFile;

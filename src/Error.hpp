@@ -16,8 +16,6 @@
  * http://www.gnu.org/licenses/gpl-3.0.html.
  */
 
-#include <config.h>
-
 #ifndef KATER_ERROR_HPP
 #define KATER_ERROR_HPP
 
@@ -33,16 +31,20 @@ extern bool katerDebug;
 bool isCurrentDebugType(const char *);
 void addDebugType(const char *);
 
-#define DEBUG_WITH_TYPE(TYPE, X)					\
-do {									\
-	if (katerDebug && isCurrentDebugType(TYPE)) { X; }		\
-} while (false)
+#define DEBUG_WITH_TYPE(TYPE, X)                                                                   \
+	do {                                                                                       \
+		if (katerDebug && isCurrentDebugType(TYPE)) {                                      \
+			X;                                                                         \
+		}                                                                                  \
+	} while (false)
 
 #else /* !ENABLE_KATER_DEBUG */
 
 #define isCurrentDebugType(X) (false)
 #define addDebugType(X)
-#define DEBUG_WITH_TYPE(TYPE, X) do {} while (0)
+#define DEBUG_WITH_TYPE(TYPE, X)                                                                   \
+	do {                                                                                       \
+	} while (0)
 #endif /* ENABLE_KATER_DEBUG */
 
 #define KATER_DEBUG(X) DEBUG_WITH_TYPE(DEBUG_TYPE, X)

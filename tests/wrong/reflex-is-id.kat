@@ -1,0 +1,10 @@
+// ------------------------------------------------------------
+// Declare a new relation A.
+relation A
+
+// A is reflexive.
+assume A? <= A
+// assume id <= A
+
+// The following should fail.
+assert A <= id

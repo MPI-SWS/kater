@@ -1,0 +1,6 @@
+include "../../../kat/rc11.kat"
+include "../../../kat/power-weak.kat"
+
+assume rf;rmw <= mo-imm
+
+assert [R|W];rc11::psc+;[R|W] & id <= power-weak::ar

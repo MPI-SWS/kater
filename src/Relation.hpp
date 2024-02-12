@@ -20,22 +20,29 @@
 #define KATER_RELATION_HPP
 
 #include "Predicate.hpp"
+
+#include <string>
 #include <unordered_map>
 
 /*******************************************************************************
  **                           RelationInfo Class
  ******************************************************************************/
 
-enum class RelType  { OneOne, ManyOne, UnsuppMany, Conj, Final };
-
-struct RelationInfo {
-	std::string  name;
-	RelType      type;
-	PredicateSet dom;
-	PredicateSet codom;
-	bool         insidePo;
+enum class RelArity { Unknown, OneOne, ManyOne, UnsuppMany, Conj, Final };
+enum class RelLocInfo { Unknown, ChangesLoc, KeepsLoc };
+struct RelExport {
+	std::string succ;
+	std::string pred;
 };
 
+struct RelationInfo {
+	std::string name;
+	RelArity arity;
+	RelLocInfo locInfo;
+	PredicateSet dom;
+	PredicateSet codom;
+	RelExport genmc;
+};
 
 /*******************************************************************************
  **                           Relation Class
@@ -47,8 +54,9 @@ public:
 	/* Negative IDs reserved for user-defined relations. */
 	using ID = int;
 
-        enum Builtin {
-		/*** CAUTION: The dummy IDs should not be a part of the builtin map */
+	enum BuiltinID {
+		/*** CAUTION: Dummy IDs (e.g., PerLocBegin) should not be a part of the builtin map
+		 */
 
 		/* same thread */
 		same_thread,
@@ -89,105 +97,52 @@ public:
 		any,
 	};
 
-	using builtin_iterator = std::unordered_map<Relation::Builtin,
-						    RelationInfo>::iterator;
-	using builtin_const_iterator = std::unordered_map<Relation::Builtin,
-							  RelationInfo>::const_iterator;
-
-protected:
 	Relation() = delete;
-	Relation(ID id, bool inverse = false) : id(id), inverse(inverse) {}
 
-public:
-	static auto createBuiltin(Builtin b) -> Relation { return {getBuiltinID(b)}; }
+	static auto createBuiltin(BuiltinID builtin) -> Relation { return {builtin}; }
 	static auto createUser() -> Relation { return {getFreshID()}; }
-
-	static auto getBuiltinID(Builtin b) -> ID { return b; }
-
-	static auto builtin_begin() -> builtin_const_iterator { return builtins.begin(); }
-	static auto builtin_end() -> builtin_const_iterator { return builtins.end(); }
 
 	[[nodiscard]] constexpr auto getID() const -> ID { return id; }
 
 	[[nodiscard]] constexpr auto isBuiltin() const -> bool { return getID() >= 0; }
+	[[nodiscard]] constexpr auto isUser() const -> bool { return !isBuiltin(); }
 
-	[[nodiscard]] constexpr auto toBuiltin() const -> Builtin {
+	[[nodiscard]] constexpr auto toBuiltin() const -> BuiltinID
+	{
 		assert(isBuiltin());
-		return static_cast<Builtin>(getID());
+		return static_cast<BuiltinID>(getID());
 	}
-
-	void markAsPerLocOf(const Relation &other) const {
-		perlocs.insert({other.getID(), *this});
-	}
-
-	[[nodiscard]] auto getPerLoc() const -> Relation {
-		assert(perlocs.count(this->getID()));
-		return perlocs.find(this->getID())->second;
-	}
-
-	[[nodiscard]] auto hasPerLoc() const -> bool { return perlocs.count(this->getID()) != 0U; }
 
 	/* Inverses this relation */
-	void invert() { inverse = !inverse; }
+	auto invert() -> Relation &
+	{
+		inverse = !inverse;
+		return *this;
+	}
 
 	/* Whether this relation is inversed */
 	[[nodiscard]] constexpr auto isInverse() const -> bool { return inverse; }
 
-	/* ***builtins only*** returns the domain of the relation */
-	[[nodiscard]] auto getDomain() const -> const PredicateSet &;
-
-	/* ***builtins only*** returns the codomain of the relation */
-	[[nodiscard]] auto getCodomain() const -> const PredicateSet &;
-
-	/* ***builtins only*** returns the type of the relation */
-	[[nodiscard]] auto getType() const -> RelType {
-		assert(isBuiltin());
-		return builtins.find(toBuiltin())->second.type;
-	}
-
-	/* Returns true if OTHER is included in THIS */
-	[[nodiscard]] auto includes(const Relation &other) const -> bool;
-
 	[[nodiscard]] auto getName() const -> std::string;
 
-	auto operator==(const Relation &other) const -> bool {
-		return getID() == other.getID() && isInverse() == other.isInverse();
-	}
-	auto operator!=(const Relation &other) const -> bool {
-		return !(*this == other);
-	}
-
-	auto operator<(const Relation &other) const -> bool {
-		return getID() < other.getID() ||
-		       (getID() == other.getID() && static_cast<int>(isInverse()) < static_cast<int>(other.isInverse()));
-	}
-	auto operator>=(const Relation &other) const -> bool {
-		return !(*this < other);
-	}
-
-	auto operator>(const Relation &other) const -> bool {
-		return getID() > other.getID() ||
-		       (getID() == other.getID() && static_cast<int>(isInverse()) > static_cast<int>(other.isInverse()));
-	}
-	auto operator<=(const Relation &other) const -> bool {
-		return !(*this > other);
-	}
+	auto operator<=>(const Relation &) const = default;
 
 private:
+	Relation(ID id) : id(id) {}
+
 	static auto getFreshID() -> ID { return --dispenser; }
 
-	ID id;
+	ID id{};
 	bool inverse = false;
 
-	static inline ID dispenser = 0;
-	static const std::unordered_map<Relation::Builtin, RelationInfo> builtins;
-	static std::unordered_map<Relation::ID, Relation> perlocs;
+	static inline ID dispenser{}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 };
 
 struct RelationHasher {
-    auto operator()(const Relation &r) const -> size_t {
-	    return std::hash<Relation::ID>()(r.getID());
-    }
+	auto operator()(const Relation &r) const -> size_t
+	{
+		return std::hash<Relation::ID>()(r.getID());
+	}
 };
 
 #endif /* KATER_RELATION_HPP */

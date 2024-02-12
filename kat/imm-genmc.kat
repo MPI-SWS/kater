@@ -31,7 +31,7 @@ assert hb = (po | sw | asw)+
 let bob = po ; [REL] | [ACQ] ; po | po ; [F] | [F] ; po | [W;REL]; po-loc ; [W]
 
 let deps = data | ctrl | addr ; po? | rmw
-let ppo = [Dep] ; (deps | rfi)+ ; [W] | bob | detour
+let ppo = [DEP] ; (deps | rfi)+ ; [W] | bob | detour
 
 // assert rmw <= ppo
 // assert detour <= ppo
@@ -41,7 +41,7 @@ let ppo = [Dep] ; (deps | rfi)+ ; [W] | bob | detour
 // acyclic (ppo | rf)
 
 // Coherence : Optimize the checking of irreflexive (hb ; eco)
-coherence (hb_stable)
+export coherence (hb_stable)
 
 // RMW atomicity
 // check  mo-imm ; [UW] <= rf ; po-imm
@@ -56,7 +56,17 @@ let psc = [SC] ; po ; hb ; po ; [SC]
         | FSC ; hb ; FSC
         | FSC ; hb ; eco ; hb ; FSC
         | SC ; po ; SC
-acyclic psc
+export acyclic psc unless [SC] = 0
 
 let ar = rfe | ppo | FSC ; hb ; eco ; hb ; FSC
-acyclic ar
+export acyclic ar
+
+
+// ---------------------------------------------------------------------
+// IMM error detection
+// ---------------------------------------------------------------------
+
+let ww_conflict = [W] ; loc-overlap ; [W]
+view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+
+export warning VE_WWRace        unless  ww_conflict <= porf_stable

@@ -26,29 +26,22 @@
 #include <string>
 #include <vector>
 
+class KatModule;
+
 class Printer {
 
-private:
-	struct RelationOut {
-		std::string succ;
-		std::string pred;
-	};
-
 public:
-	Printer(const std::string &dirPrefix, const std::string &outPrefix);
+	Printer(const KatModule &module, const std::string &dirPrefix,
+		const std::string &outPrefix);
 
 	/* Outputs RES */
 	void output(const CNFAs &cnfas);
 
 private:
-//	void printInclusionError(const std::string &s, const NFA &lhs, const NFA &rhs);
-//	void printInclusionWarning(const std::string &s, const NFA &lhs, const NFA &rhs);
+	void printPredSet(std::ostream &ostr, const std::string &arg, const PredicateSet &ps);
 
-	static void printPredSet(std::ostream &ostr, const std::string &arg,
-			  const PredicateSet &ps);
-
-	void printRelation(std::ostream& ostr, const std::string &res,
-			   const std::string &arg, const TransLabel *r);
+	void printRelation(std::ostream &ostr, const std::string &res, const std::string &arg,
+			   const TransLabel *r);
 	void printTransLabel(const TransLabel *t, const std::string &res, const std::string &arg);
 
 	static auto getCalcIdx(unsigned id) -> unsigned { return calcToIdxMap[id]; }
@@ -61,8 +54,10 @@ private:
 	void printInclusionCpp(const NFA &lhs, const NFA &rhs, unsigned id,
 			       std::optional<unsigned> rhsViewIdx);
 
-	void printAcyclicHpp(const NFA &nfa);
-	void printAcyclicCpp(const NFA &nfa);
+	void printAcyclicHpp(const NFA &nfa, const std::optional<NFA> &unlessNFA,
+			     const std::string &genmc, unsigned id);
+	void printAcyclicCpp(const NFA &nfa, const std::optional<NFA> &unlessNFA,
+			     const std::string &genmc, unsigned id);
 
 	void printRecoveryHpp(const NFA &nfa);
 	void printRecoveryCpp(const NFA &nfa);
@@ -82,6 +77,10 @@ private:
 	auto hpp() -> std::ostream & { return *outHpp; }
 	auto cpp() -> std::ostream & { return *outCpp; }
 
+	auto getModule() const -> const KatModule & { return module_; }
+
+	const KatModule &module_;
+
 	/* Prefix for the names to be printed (class name, filenames, etc) */
 	std::string prefix;
 
@@ -93,14 +92,11 @@ private:
 
 	/* Streams for the header file */
 	std::ofstream foutHpp; /* only set if we're writing to a file */
-	std::ostream* outHpp = &std::cout;
+	std::ostream *outHpp = &std::cout;
 
 	/* Streams for the implementation file */
 	std::ofstream foutCpp; /* only set if we're writing to a file */
-	std::ostream* outCpp = &std::cout;
-
-	static const std::unordered_map<Relation::Builtin, RelationOut> relationNames;
-	static const std::unordered_map<PredicateMask, std::string> predicateNames;
+	std::ostream *outCpp = &std::cout;
 
 	static std::vector<unsigned> calcToIdxMap;
 	std::unordered_set<unsigned> viewCalcs;

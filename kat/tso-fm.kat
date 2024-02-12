@@ -1,4 +1,4 @@
-declare to
+relation to
 
 let hb = ([R|W|F]; po; [R|W|F] | rf)+
 

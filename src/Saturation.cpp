@@ -111,24 +111,6 @@ void saturateInitFinalPreds(NFA &nfa, const Theory &theory)
 	removeDeadStates(nfa);
 }
 
-auto isEco(const TransLabel &label) -> bool
-{
-	assert(!label.isPredicate());
-	auto rf = Relation::createBuiltin(Relation::BuiltinID::rf).getID();
-	auto rfe = Relation::createBuiltin(Relation::BuiltinID::rfe).getID();
-	auto rfi = Relation::createBuiltin(Relation::BuiltinID::rfi).getID();
-	auto mo = Relation::createBuiltin(Relation::BuiltinID::mo_imm).getID();
-	auto moe = Relation::createBuiltin(Relation::BuiltinID::moe).getID();
-	auto moi = Relation::createBuiltin(Relation::BuiltinID::moi).getID();
-	auto fr = Relation::createBuiltin(Relation::BuiltinID::fr_imm).getID();
-	auto fre = Relation::createBuiltin(Relation::BuiltinID::fre).getID();
-	auto fri = Relation::createBuiltin(Relation::BuiltinID::fri).getID();
-
-	auto id = label.getRelation()->getID();
-	return id == rf || id == rfe || id == rfi || id == mo || id == moe || id == moi ||
-	       id == fr || id == fre || id == fri;
-}
-
 void saturateLoc(NFA &nfa, const Theory &theory)
 {
 	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
@@ -144,12 +126,12 @@ void saturateLoc(NFA &nfa, const Theory &theory)
 			nfa.foreachPathReachableFrom(
 				{t.dest}, [&](std::pair<NFA::State *, NFA::Transition> p) {
 					perloc &= (p.second.label.isPredicate() ||
-						   isEco(p.second.label));
+						   theory.isEco(p.second.label));
 				});
 			nfa.foreachPathReachingTo({&*s},
 						  [&](std::pair<NFA::State *, NFA::Transition> p) {
 							  perloc &= (p.second.label.isPredicate() ||
-								     isEco(p.second.label));
+								     theory.isEco(p.second.label));
 						  });
 			if (!perloc) {
 				continue;

@@ -59,7 +59,7 @@ auto main(int argc, char **argv) -> int
 		if (config.verbose >= 1) {
 			std::cout << "Exporting code... ";
 		}
-		if (!kater.exportCode(config.dir, config.name)) {
+		if (!kater.exportCode()) {
 			exit(EPRINT);
 		}
 		if (config.verbose >= 1) {

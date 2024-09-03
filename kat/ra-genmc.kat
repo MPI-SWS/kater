@@ -18,7 +18,7 @@ assert sw = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F|TJ|TB])? ; [
 // Optimized calculation of happens-before.
 // Save the part of `hb` that does not finish with a reads-from edge
 
-view hb_stable = (po-imm | (sw_to_r | asw) ; po-imm | sw_to_f)+
+view hb_stable = (po | (sw_to_r | asw) ; po | sw_to_f)+
 let hb = (hb_stable | hb_stable? ; (sw_to_r | asw))
 
 assert hb = (po | sw | asw)+
@@ -31,7 +31,7 @@ assert hb = (po | sw | asw)+
 // acyclic (po | rf)
 
 // Coherence : Optimize the checking of irreflexive (hb ; eco)
-export coherence (hb_stable)
+export coherence hb_stable
 
 
 // ---------------------------------------------------------------------
@@ -42,7 +42,7 @@ let ww_conflict = [W] ; loc-overlap ; [W]
 let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
 let conflicting = ww_conflict | wr_conflict
 let na_conflict = [NA] ; conflicting | conflicting ; [NA]
-view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+view porf_stable = (po | (rf | tc | tj); po)+
 
 // GenMC needs to handle the no-alloc case (access validity)
 

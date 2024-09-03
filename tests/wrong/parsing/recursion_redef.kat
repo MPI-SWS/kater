@@ -1,0 +1,4 @@
+predicate x
+
+let rec x = x | y;rf
+and y = x;fr

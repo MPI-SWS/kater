@@ -1,0 +1,5 @@
+let rec x = po | x;rf | y;mo
+and y = fr | x;detour | y;[F]
+
+assert x <= x
+assert y <= y

@@ -1,0 +1,3 @@
+[submodule "genmc-tool"]
+	path = genmc-tool
+	url = ../genmc-tool.git

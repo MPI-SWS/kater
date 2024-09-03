@@ -8,18 +8,18 @@ let eco = (rf | mo | fr)+
 // Optimized calculation of synchronizes-with
 // Save the view of write messages
 
-let relseq = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)*
+let relseq = [REL] ; ([F|TC] ; po)? ; (rf ; rmw)*
 let sw_to_r = relseq ; rf ; [ACQ]
-let sw_to_f = relseq ; rf ; po ; [F|TJ|TB] ; [ACQ]
+let sw_to_f = relseq ; rf ; po ; [F|TJ] ; [ACQ]
 let sw = sw_to_r | sw_to_f
 let asw = tc | tj
 
-assert sw = [REL] ; ([F|TC|TE] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F|TJ|TB])? ; [ACQ]
+assert sw = [REL] ; ([F|TC] ; po)? ; (rf ; rmw)* ; rf ; (po ; [F|TJ])? ; [ACQ]
 
 // Optimized calculation of happens-before.
 // Save the part of `hb` that does not finish with a reads-from edge
 
-view hb_stable = (po-imm | (sw_to_r | asw) ; po-imm | sw_to_f)+
+view hb_stable = (po | (sw_to_r | asw) ; po | sw_to_f)+
 let hb = hb_stable | hb_stable? ; (sw_to_r | asw)
 
 assert hb = (po | sw | asw)+
@@ -41,7 +41,7 @@ let ppo = [DEP] ; (deps | rfi)+ ; [W] | bob | detour
 // acyclic (ppo | rf)
 
 // Coherence : Optimize the checking of irreflexive (hb ; eco)
-export coherence (hb_stable)
+export coherence hb_stable
 
 // RMW atomicity
 // check  mo-imm ; [UW] <= rf ; po-imm
@@ -56,7 +56,7 @@ let psc = [SC] ; po ; hb ; po ; [SC]
         | FSC ; hb ; FSC
         | FSC ; hb ; eco ; hb ; FSC
         | SC ; po ; SC
-export acyclic psc unless [SC] = 0
+export acyclic psc unless [SC];any = 0
 
 let ar = rfe | ppo | FSC ; hb ; eco ; hb ; FSC
 export acyclic ar
@@ -67,6 +67,6 @@ export acyclic ar
 // ---------------------------------------------------------------------
 
 let ww_conflict = [W] ; loc-overlap ; [W]
-view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+view porf_stable = (po | (rf | tc | tj); po)+
 
 export warning VE_WWRace        unless  ww_conflict <= porf_stable

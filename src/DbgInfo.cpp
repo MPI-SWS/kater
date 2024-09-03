@@ -16,31 +16,11 @@
  * http://www.gnu.org/licenses/gpl-3.0.html.
  */
 
-#ifndef KATER_KAT_MODULE_API_HPP
-#define KATER_KAT_MODULE_API_HPP
+#include "DbgInfo.hpp"
 
-#include "RegExp.hpp"
+#include <ostream>
 
-using URE = std::unique_ptr<RegExp>;
-using UCO = std::unique_ptr<Constraint>;
-enum class ReductionType { Po, Self };
-
-enum class VarStatus { Normal, Reduce, View };
-
-// FIXME: Polymorphism
-struct SavedVar {
-	SavedVar(URE exp) : exp(std::move(exp)) {}
-	SavedVar(URE exp, ReductionType t, URE red)
-		: exp(std::move(exp)), status(VarStatus::Reduce), redT(t), red(std::move(red))
-	{
-	}
-
-	SavedVar(URE exp, VarStatus s) : exp(std::move(exp)), status(s) {}
-
-	URE exp = nullptr;
-	VarStatus status = VarStatus::Normal;
-	ReductionType redT = ReductionType::Self;
-	URE red = nullptr;
-};
-
-#endif /* KATER_KAT_MODULE_API_HPP */
+auto operator<<(std::ostream &ostr, const DbgInfo &dbg) -> std::ostream &
+{
+	return ostr << dbg.filename << ":" << dbg.line;
+}

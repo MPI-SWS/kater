@@ -78,21 +78,23 @@ BLANK	[ \t\r]
 %}
 
 acyclic			return yy::parser::make_ACYCLIC	(loc);
+and			return yy::parser::make_REC_AND	(loc);
 assume			return yy::parser::make_ASSUME	(loc);
 assert			return yy::parser::make_ASSERT	(loc);
 coherence		return yy::parser::make_COHERENCE(loc);
 disjoint		return yy::parser::make_DISJOINT(loc);
 error			return yy::parser::make_ERROR	(loc);
 export			return yy::parser::make_EXPORT	(loc);
+extra			return yy::parser::make_EXTRA	(loc);
 genmc			return yy::parser::make_GENMC   (loc);
 id			return yy::parser::make_ID_REL	(loc);
 include			return yy::parser::make_INCLUDE	(loc);
 let			return yy::parser::make_LET	(loc);
 predicate		return yy::parser::make_PREDICATE(loc);
+rec			return yy::parser::make_REC     (loc);
 recovery		return yy::parser::make_RECOVERY(loc);
 relation		return yy::parser::make_RELATION(loc);
 rot			return yy::parser::make_ROT     (loc);
-save			return yy::parser::make_SAVE	(loc);
 total			return yy::parser::make_TOTAL	(loc);
 view			return yy::parser::make_VIEW	(loc);
 unless			return yy::parser::make_UNLESS	(loc);

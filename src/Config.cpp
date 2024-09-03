@@ -34,6 +34,7 @@ void Config::reset()
 	generate = false;
 	name = "";
 	dir = "/tmp";
+	emitVisitArrays = false;
 	inputFile = "";
 }
 
@@ -48,7 +49,7 @@ void Config::printUsage(const char *kater)
 	       "OPTIONS:\n"
 	       "\n"
 	       "-h, --help                  Display this help message and exit\n"
-	       "--no-par                    Do not check Kater assertions in parallel.\n"
+	       "--no-par                    Disable assertion parallelization.\n"
 #ifdef ENABLE_KATER_DEBUG
 	       "-d, --debug                 Print all debugging information.\n"
 	       "                            Default: %d\n"
@@ -62,11 +63,12 @@ void Config::printUsage(const char *kater)
 	       "-p, --prefix                Directory where the resulting files will be stored.\n"
 	       "                            Has no effect without -n.\n"
 	       "                            Default: \"%s\"\n"
+	       "--femit-visit-arrays        Do not try to optimize printing of visitation arrays.\n"
 	       "-v[NUM], --verbose[=NUM]    Print verbose execution information. NUM is optional:\n"
 	       "                            0 is quiet; 1 prints status; 2 is noisy;\n"
 	       "                            3 is noisier.\n"
 	       "                            Default: %d\n",
-	       kater, static_cast<int>(parallel),
+	       kater,
 #ifdef ENABLE_KATER_DEBUG
 	       debug, debugOnly.c_str(),
 #endif
@@ -80,8 +82,9 @@ void Config::parseOptions(int argc, char **argv)
 	reset();
 
 	static constexpr int parallelOpt = 4142;
+	static constexpr int emitVisitArraysOpt = 4143;
 #ifdef ENABLE_KATER_DEBUG
-	static constexpr int debugOnlyOpt = 4242;
+	static constexpr int debugOnlyOpt = 4144;
 #endif
 
 	const char *shortopts = "hden:p:v::";
@@ -95,6 +98,7 @@ void Config::parseOptions(int argc, char **argv)
 		{"export", no_argument, nullptr, 'e'},
 		{"name", required_argument, nullptr, 'n'},
 		{"prefix", required_argument, nullptr, 'p'},
+		{"femit-visit-arays", no_argument, nullptr, emitVisitArraysOpt},
 		{"verbose", optional_argument, nullptr, 'v'},
 		{nullptr, 0, nullptr, 0} /* Terminator */
 	};
@@ -118,6 +122,9 @@ void Config::parseOptions(int argc, char **argv)
 			break;
 		case 'p':
 			dir = optarg;
+			break;
+		case emitVisitArraysOpt:
+			emitVisitArrays = true;
 			break;
 		case 'v':
 			verbose = optarg != nullptr ? atoi(optarg) : 1;

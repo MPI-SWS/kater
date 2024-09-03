@@ -19,7 +19,7 @@ let dmb.st = DMB_ST
 
 // Atomic RMW relation
 let amo = rmw
-let rmw = amo // | lxsx
+let arm_rmw = amo // | lxsx
 
 // Local read successor
 let lrs = [W]; po-loc ; ([R] ; po-loc)* ; [R]
@@ -32,7 +32,7 @@ let dob = addr | data
 	| (addr | data); lrs
 
 // Atomic ordering
-let aob = rmw
+let aob = arm_rmw
 	| [UW]; lrs; [A | Q]
 
 // Barrier ordering
@@ -45,7 +45,7 @@ let bob = po; [dmb.full]
 	| [W]; po; [dmb.st]; po; [W]
 	| po; [L]
 
-save[ppo] ppo = (dob | aob | bob)+
+let ppo = (dob | aob | bob)+
 
 let ob = (rfe | mo | fr | ppo)
 

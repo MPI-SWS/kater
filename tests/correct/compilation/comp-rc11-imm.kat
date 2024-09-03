@@ -3,6 +3,6 @@ include "../../../kat/imm.kat"
 
 assume [R;SC] = 0
 assume [W;SC] = 0
-assume rf;rmw <= mo-imm
+assume rf;rmw <= mo
 
 assert rc11::psc <= imm::psc

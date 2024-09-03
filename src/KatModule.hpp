@@ -19,109 +19,40 @@
 #ifndef KATER_KAT_MODULE_HPP
 #define KATER_KAT_MODULE_HPP
 
-#include "Inclusion.hpp"
-#include "KatModuleAPI.hpp"
+#include "DbgInfo.hpp"
 #include "Parser.hpp"
 #include "Theory.hpp"
 
 class KatModule {
 
 public:
-	using UCO = std::unique_ptr<Constraint>;
-
-	struct DbgInfo {
-		DbgInfo(const std::string *name, int line)
-			: filename(name != nullptr ? *name : ""), line(line)
-		{
-		}
-		std::string filename;
-		int line;
-
-		friend auto operator<<(std::ostream &ostr, const DbgInfo &dbg) -> std::ostream &;
-	};
-
-private:
-	using VarMap = std::unordered_map<std::string, URE>;
-	using SavedVarMap = std::vector<std::pair<Relation, SavedVar>>;
-
-	using Assert = struct {
-		UCO co;
-		DbgInfo loc;
-	};
-
-public:
 	KatModule() = default;
 
-	using var_iter = VarMap::iterator;
-	using var_const_iter = VarMap::const_iterator;
-	using svar_iter = SavedVarMap::iterator;
-	using svar_const_iter = SavedVarMap::const_iterator;
-	using rec_iter = std::vector<URE>::iterator;
-	using rec_const_iter = std::vector<URE>::const_iterator;
-	using coh_iter = std::vector<URE>::iterator;
-	using coh_const_iter = std::vector<URE>::const_iterator;
-	using incl_iter = std::vector<UCO>::iterator;
-	using incl_const_iter = std::vector<UCO>::const_iterator;
-	using assr_iter = std::vector<Assert>::iterator;
-	using assr_const_iter = std::vector<Assert>::const_iterator;
-	using assm_iter = std::vector<UCO>::iterator;
-	using assm_const_iter = std::vector<UCO>::const_iterator;
+	auto lets() const { return std::views::all(lets_); }
+	auto lets() { return std::views::all(lets_); }
 
-	auto var_begin() -> var_iter { return variables.begin(); }
-	auto var_end() -> var_iter { return variables.end(); }
-	auto var_begin() const -> var_const_iter { return variables.begin(); }
-	auto var_end() const -> var_const_iter { return variables.end(); }
+	auto exports() { return std::views::all(exports_); }
+	auto exports() const { return std::views::all(exports_); }
 
-	auto svar_begin() -> svar_iter { return savedVariables.begin(); }
-	auto svar_end() -> svar_iter { return savedVariables.end(); }
-	auto svar_begin() const -> svar_const_iter { return savedVariables.begin(); }
-	auto svar_end() const -> svar_const_iter { return savedVariables.end(); }
+	auto asserts() const { return std::views::all(asserts_); }
+	auto asserts() { return std::views::all(asserts_); }
 
-	auto acyc_begin() { return acyclicityConstraints.begin(); }
-	auto acyc_end() { return acyclicityConstraints.end(); }
-	auto acycs() { return std::ranges::ref_view(acyclicityConstraints); }
-	auto acyc_begin() const { return acyclicityConstraints.begin(); }
-	auto acyc_end() const { return acyclicityConstraints.end(); }
-	auto acycs() const { return std::ranges::ref_view(acyclicityConstraints); }
+	auto getPPODeclaration() const -> const LetStatement * { return ppo_; }
+	auto getHBDeclaration() const -> const LetStatement * { return hb_; }
+	auto getCOHDeclaration() const -> const LetStatement * { return coh_; }
 
-	auto rec_begin() -> rec_iter { return recoveryConstraints.begin(); }
-	auto rec_end() -> rec_iter { return recoveryConstraints.end(); }
-	auto rec_begin() const -> rec_const_iter { return recoveryConstraints.begin(); }
-	auto rec_end() const -> rec_const_iter { return recoveryConstraints.end(); }
-
-	auto coh_begin() -> coh_iter { return coherenceConstraints.begin(); }
-	auto coh_end() -> coh_iter { return coherenceConstraints.end(); }
-	auto coh_begin() const -> coh_const_iter { return coherenceConstraints.begin(); }
-	auto coh_end() const -> coh_const_iter { return coherenceConstraints.end(); }
-
-	auto incl_begin() -> incl_iter { return inclusionConstraints.begin(); }
-	auto incl_end() -> incl_iter { return inclusionConstraints.end(); }
-	auto incl_begin() const -> incl_const_iter { return inclusionConstraints.begin(); }
-	auto incl_end() const -> incl_const_iter { return inclusionConstraints.end(); }
-
-	auto assert_begin() -> assr_iter { return asserts.begin(); }
-	auto assert_end() -> assr_iter { return asserts.end(); }
-	auto assert_begin() const -> assr_const_iter { return asserts.begin(); }
-	auto assert_end() const -> assr_const_iter { return asserts.end(); }
-
-	auto getRegisteredNum() const -> size_t { return variables.size(); }
-
-	auto getSavedNum() const -> size_t { return savedVariables.size(); }
-
-	auto getAssertNum() const -> size_t { return asserts.size(); }
-
-	auto getAcyclicNum() const -> size_t { return acyclicityConstraints.size(); }
-
-	auto getRecoveryNum() const -> size_t { return recoveryConstraints.size(); }
-
-	auto getInclusionNum() const -> size_t { return inclusionConstraints.size(); }
-
-	auto getCohNum() const -> size_t { return coherenceConstraints.size(); }
-
-	auto getPPO() const -> URE { return (ppo) ? ppo->clone() : nullptr; }
-	auto getPPORF() const -> URE { return (pporf) ? pporf->clone() : nullptr; }
-	auto getPORF() const -> URE { return (porf_) ? porf_->clone() : nullptr; }
-	auto getHB() const -> URE { return (hb) ? hb->clone() : nullptr; }
+	auto createPPORF() const -> std::unique_ptr<RegExp>
+	{
+		return PlusRE::createOpt(AltRE::createOpt(
+			getPPODeclaration()->getRE()->clone(), getRegisteredRE("rfe")->clone(),
+			getRegisteredRE("tc")->clone(), getRegisteredRE("tj")->clone()));
+	}
+	auto createPORF() const -> std::unique_ptr<RegExp>
+	{
+		return PlusRE::createOpt(AltRE::createOpt(
+			getRegisteredRE("po")->clone(), getRegisteredRE("rfe")->clone(),
+			getRegisteredRE("tc")->clone(), getRegisteredRE("tj")->clone()));
+	}
 
 	auto getTheory() const -> const Theory & { return theory_; }
 	auto getTheory() -> Theory & { return theory_; }
@@ -129,7 +60,8 @@ public:
 	void registerRelation(Relation r, RelationInfo info)
 	{
 		auto &theory = getTheory();
-		registerDerived(info.name, CharRE::create(TransLabel(r)));
+		registerLet(LetStatement::create(info.name, CharRE::create(TransLabel(r)),
+						 NoSavedExp::create(), info.dbg));
 		theory.registerRelation(r, info);
 
 		if (!r.isUser() || info.locInfo == RelLocInfo::KeepsLoc)
@@ -137,7 +69,8 @@ public:
 
 		auto perlocName = info.name + "-loc";
 		auto rloc = Relation::createUser();
-		registerDerived(perlocName, CharRE::create(TransLabel(rloc)));
+		registerLet(LetStatement::create(perlocName, CharRE::create(TransLabel(rloc)),
+						 NoSavedExp::create(), std::nullopt));
 		auto rlocInfo = RelationInfo{
 			.name = perlocName,
 			.arity = info.arity, /* maybe Unknown? */
@@ -151,100 +84,59 @@ public:
 
 	void registerPredicate(Predicate p, PredicateInfo info)
 	{
-		registerDerived(info.name, CharRE::create(TransLabel(std::nullopt, {p})));
+		registerLet(LetStatement::create(info.name,
+						 CharRE::create(TransLabel(std::nullopt, {p})),
+						 NoSavedExp::create(), std::nullopt));
 		getTheory().registerPredicate(p, info);
 	}
 
-	void registerDerived(const std::string &id, URE re)
+	void registerLet(std::unique_ptr<LetStatement> let)
 	{
-		variables.insert({id, std::move(re)});
+		/* In case we are overwriting */
+		auto existing = std::find_if(lets_.begin(), lets_.end(), [&](const auto &olet) {
+			return let->getName() == olet->getName();
+		});
+		if (existing != lets_.end())
+			existing = lets_.erase(existing);
+		lets_.insert(existing, std::move(let));
 	}
 
-	void registerSaveDerived(const std::string &id, URE re)
+	void registerAssert(std::unique_ptr<AssertStatement> asrt)
 	{
-		auto r = Relation::createUser();
-		registerDerived(id, CharRE::create(TransLabel(r)));
-		savedVariables.push_back({r, SavedVar(std::move(re))});
+		asserts_.push_back(std::move(asrt));
 	}
 
-	void registerSaveReduceDerived(const std::string &idSave, const std::string &idRed, URE re)
+	void registerPPO(LetStatement *ppo)
 	{
-		auto r = Relation::createUser();
-		registerDerived(idSave, CharRE::create(TransLabel(r)));
-		savedVariables.push_back(
-			{r, SavedVar(std::move(re),
-				     idRed == idSave ? ReductionType::Self : ReductionType::Po,
-				     getRegisteredID(idRed))});
+		ppo_ = ppo;
+		if (ppo)
+			depTracking = (*ppo->getRE() != *getRegisteredRE("po"));
 	}
 
-	void registerViewDerived(const std::string &id, URE re)
-	{
-		auto r = Relation::createUser();
-		registerDerived(id, CharRE::create(TransLabel(r)));
-		savedVariables.push_back({r, SavedVar(std::move(re), VarStatus::View)});
-	}
+	void registerHB(LetStatement *hb) { hb_ = hb; }
 
-	void registerAssert(UCO co, const yy::location &loc)
-	{
-		asserts.push_back({std::move(co), DbgInfo(loc.end.filename, loc.end.line)});
-	}
-
-	void registerPPO(URE r)
-	{
-		if (!r) {
-			return;
-		}
-
-		// FIXME: Move porf registration to parsing ctor?
-		auto po = getRegisteredID("po");
-		ppo = std::move(r);
-
-		depTracking = (*ppo != *po);
-
-		/* Also create pporf since we are at it */
-		auto rf = getRegisteredID("rfe");
-		auto tc = getRegisteredID("tc");
-		auto tj = getRegisteredID("tj");
-		pporf = StarRE::createOpt(
-			AltRE::createOpt(ppo->clone(), rf->clone(), tc->clone(), tj->clone()));
-		porf_ = StarRE::createOpt(
-			AltRE::createOpt(po->clone(), std::move(rf), std::move(tc), std::move(tj)));
-	}
-
-	void registerHB(URE r)
-	{
-		if (!r) {
-			return;
-		}
-
-		hb = std::move(r);
-	}
+	void registerCOH(LetStatement *coh) { coh_ = coh; }
 
 	// Handle consistency constraint in the input file
-	void registerExport(const Constraint *c, const yy::location &loc);
+	void registerExport(std::unique_ptr<ExportStatement> stmt, const yy::location &loc);
 
-	auto getRegisteredID(const std::string &id) const -> URE
+	auto getRegisteredRE(const std::string &name) const -> const RegExp *
 	{
-		auto it = variables.find(id);
-		return (it == variables.end()) ? nullptr : it->second->clone();
+		auto it = std::find_if(lets_.begin(), lets_.end(),
+				       [&](auto &let) { return let->getName() == name; });
+		return (it == lets_.end()) ? nullptr : (*it)->getRE();
 	}
-
-	auto isSavedID(const CharRE *re) const -> bool
+	auto getRegisteredStatement(const std::string &name) const -> const LetStatement *
 	{
-		auto ro = re->getLabel().getRelation();
-		assert(ro.has_value());
-		return std::find_if(savedVariables.begin(), savedVariables.end(), [&](auto &p) {
-			       return p.first == *ro;
-		       }) != savedVariables.end();
+		auto it = std::find_if(lets_.begin(), lets_.end(),
+				       [&](auto &let) { return let->getName() == name; });
+		return (it == lets_.end()) ? nullptr : &*(*it);
 	}
-
-	auto getSavedID(const CharRE *re) const -> URE
+	auto getRegisteredStatement(const std::string &name) -> LetStatement *
 	{
-		assert(isSavedID(re));
-		auto ro = re->getLabel().getRelation();
-		return std::find_if(savedVariables.begin(), savedVariables.end(),
-				    [&](auto &p) { return p.first == *ro; })
-			->second.exp->clone();
+		auto it = std::find_if(lets_.begin(), lets_.end(),
+				       [&](auto &let) { return let->getName() == name; });
+		return (it == lets_.end()) ? nullptr : &*(*it);
 	}
 
 	auto isDepTracking() const -> bool
@@ -253,27 +145,19 @@ public:
 		return *depTracking;
 	}
 
+	/** Replaces all uses of FROM with TO */
+	void replaceAllUsesWith(const RegExp *from, const RegExp *to);
+
 private:
-	// Results from parsing the input file
-	VarMap variables{};
-
-	// XXX: Maybe it's better to even have two containers below
-	//      so that saved/reduced variables are treated differently,
-	//      but I've no idea how many variable categories we want to have.
-	//      If just two, I prefer separated. If more, polymorphism.
-	SavedVarMap savedVariables{};
-
+	std::vector<std::unique_ptr<LetStatement>> lets_{};
+	std::vector<std::unique_ptr<AssertStatement>> asserts_{};
+	std::vector<std::unique_ptr<ExportStatement>> exports_{};
 	Theory theory_{};
 
-	std::vector<Assert> asserts{};
-	std::vector<UCO> acyclicityConstraints{};
-	std::vector<URE> recoveryConstraints{};
-	std::vector<UCO> inclusionConstraints{};
-	std::vector<URE> coherenceConstraints{};
-	URE ppo{};
-	URE pporf{};
-	URE porf_{};
-	URE hb{};
+	/* Store some commonly used expressions for easy access */
+	LetStatement *ppo_{};
+	LetStatement *hb_{};
+	LetStatement *coh_{};
 
 	std::optional<bool> depTracking{};
 };

@@ -18,6 +18,10 @@
 
 #include "RegExp.hpp"
 #include "Saturation.hpp"
+#include "Theory.hpp"
+#include "Utils.hpp"
+
+using namespace std::literals;
 
 auto RegExp::createFalse() -> std::unique_ptr<RegExp> { return AltRE::create(); }
 
@@ -77,6 +81,35 @@ auto RegExp::isAnyRelation() const -> bool
 		}
 	}
 	return false;
+}
+
+auto containsMutRec(const RegExp *re) -> bool
+{
+	if (const auto *mRE = dynamic_cast<const MutRecRE *>(re))
+		return true;
+	return std::any_of(re->kid_begin(), re->kid_end(),
+			   [&](auto &k) { return containsMutRec(&*k); });
+}
+
+auto RegExp::toNFA() const -> NFA
+{
+	/* Fastpath: don't create two states for empty regexps */
+	if (isFalse())
+		return {};
+
+	/* Fastpath: if there are no mut rec relations,
+	 * just do a standard construction. This path won't
+	 * help getting a minimal NFA (since typically we simplify
+	 * afterwards anyway), but it may make certain simplifications
+	 * faster (e.g., similarity). */
+	if (!containsMutRec(this))
+		return toNFAFast();
+
+	NFA nfa;
+	auto *s = nfa.createStarting();
+	auto *a = nfa.createAccepting();
+	this->expandOnNFA(nfa, {s, a}, {});
+	return nfa;
 }
 
 auto PlusRE::createOpt(std::unique_ptr<RegExp> r) -> std::unique_ptr<RegExp>
@@ -142,9 +175,33 @@ auto RotRE::createOpt(std::unique_ptr<RegExp> r) -> std::unique_ptr<RegExp>
 	return create(std::move(r));
 }
 
-auto RotRE::toNFA(const Theory &theory) const -> NFA
+auto MutRecRE::createOpt(Relation rel, std::vector<Relation> rels,
+			 std::vector<std::unique_ptr<RegExp>> res) -> std::unique_ptr<RegExp>
 {
-	auto nfa = getKid(0)->toNFA(theory);
-	saturateRotate(nfa, theory);
-	return nfa;
+	return create(rel, std::move(rels), std::move(res));
+}
+
+void MutRecRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const
+{
+	RecStatesMap fresh(recStates);
+
+	/* Create a fresh state for each of the mut. rec. relations */
+	for (auto i = 0U; i < getNumKids(); i++)
+		fresh[recursive_[i]] = nfa.createState();
+
+	auto *s = nfa.createState();
+	for (auto i = 0U; i < getNumKids(); i++) {
+		auto *kidDest = fresh[recursive_[i]];
+		getKid(i)->expandOnNFA(nfa, {s, kidDest}, fresh);
+	}
+	nfa.addEpsilonTransition(fresh[getRelation()], p.second);
+	nfa.addEpsilonTransition(p.first, s);
+}
+
+auto CharRE::dump(std::ostream &s, const Theory *theory) const -> std::ostream &
+{
+	auto &label = getLabel();
+	if (!theory)
+		return s << label;
+	return prettyPrint(s, label, *theory);
 }

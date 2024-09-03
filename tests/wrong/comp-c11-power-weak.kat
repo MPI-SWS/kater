@@ -1,6 +1,0 @@
-include "../../kat/c11-old.kat"
-include "../../kat/power-weak.kat"
-
-assume rf;rmw <= mo-imm
-
-assert [R|W];c11-old::psc+;[R|W] & id <= power-weak::ar

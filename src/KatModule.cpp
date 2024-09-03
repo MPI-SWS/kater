@@ -17,27 +17,47 @@
  */
 
 #include "KatModule.hpp"
+#include "RegExpUtils.hpp"
 
-std::ostream &operator<<(std::ostream &s, const KatModule::DbgInfo &dbg)
+void KatModule::registerExport(std::unique_ptr<ExportStatement> stmt, const yy::location &loc)
 {
-	return s << dbg.filename << ":" << dbg.line;
+	if (auto *cohCst = dynamic_cast<const CoherenceConstraint *>(stmt->getConstraint())) {
+		registerCOH(getRegisteredStatement(cohCst->getID()));
+	}
+	exports_.push_back(std::move(stmt));
 }
 
-void KatModule::registerExport(const Constraint *c, const yy::location &loc)
+void KatModule::replaceAllUsesWith(const RegExp *from, const RegExp *to)
 {
-	if (dynamic_cast<const AcyclicConstraint *>(c))
-		acyclicityConstraints.push_back(c->clone());
-	else if (dynamic_cast<const RecoveryConstraint *>(c))
-		recoveryConstraints.push_back(c->getKid(0)->clone());
-	else if (dynamic_cast<const CoherenceConstraint *>(c))
-		coherenceConstraints.push_back(c->getKid(0)->clone());
-	else if (const auto *error = dynamic_cast<const ErrorConstraint *>(c))
-		inclusionConstraints.push_back(c->clone());
-	else if (const auto *conj = dynamic_cast<const WarningConstraint *>(c)) {
-		inclusionConstraints.push_back(c->clone());
-	} else {
-		std::cerr << loc << ": [Warning] Ignoring the unsupported constraint:" << *c
-			  << "\n";
-		exit(1);
+	/* A visitor to easily recurse over constraints */
+	auto visitor = make_visitor(
+		type_list<AcyclicConstraint, SubsetConstraint>{},
+		[&](const AcyclicConstraint &cst) {
+			replaceREWith(const_cast<AcyclicConstraint &>(cst).getRERef(), from, to);
+		},
+		[&](const SubsetConstraint &cst) {
+			replaceREWith(const_cast<SubsetConstraint &>(cst).getLHSRef(), from, to);
+			replaceREWith(const_cast<SubsetConstraint &>(cst).getRHSRef(), from, to);
+		});
+
+	/* Go over everything and replace */
+	for (auto &let : lets()) {
+		replaceREWith(let->getRERef(), from, to);
+		auto &savedUP = let->getSavedRef();
+		if (auto *vexp = dynamic_cast<ViewExp *>(&*savedUP))
+			replaceREWith(vexp->getRERef(), from, to);
+		else if (auto *sexp = dynamic_cast<SetExp *>(&*savedUP))
+			replaceREWith(sexp->getRERef(), from, to);
+	}
+	for (auto &assm : getTheory().assumes()) {
+		visitor(*assm->getConstraint());
+	}
+	for (auto &assrt : asserts()) {
+		visitor(*assrt->getConstraint());
+	}
+	for (auto &stmt : exports()) {
+		visitor(*stmt->getConstraint());
+		if (stmt->getUnless())
+			visitor(*stmt->getUnless());
 	}
 }

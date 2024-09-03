@@ -1,8 +1,8 @@
 let ppo = po // ppo decides how the graph is cut, hence ppo = po
 let tso = ([R|F|UW|TJ|TB]; po | po ; [W|F|TE|TC] | [W;SC]; po; [R;SC] | rfe | mo | fr)
 
-view hb_stable = (po-imm | (rf | tc | tj); po-imm)+
-export coherence (hb_stable)
+view hb_stable = (po | (rf | tc | tj); po)+
+export coherence hb_stable
 
 export acyclic tso
 
@@ -14,7 +14,7 @@ let ww_conflict = [W] ; loc-overlap ; [W]
 let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
 let conflicting = ww_conflict | wr_conflict
 let na_conflict = [NA] ; conflicting | conflicting ; [NA]
-view porf_stable = (po-imm | (rf | tc | tj); po-imm)+
+view porf_stable = (po | (rf | tc | tj); po)+
 
 export error VE_AccessNonMalloc unless  alloc <= hb_stable
 export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0

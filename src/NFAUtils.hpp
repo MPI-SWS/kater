@@ -51,6 +51,8 @@ void addTransitivePredicateEdges(NFA &nfa, const Theory &theory);
 
 void breakToParts(NFA &nfa);
 
+void simplify(NFA &nfa, const Theory &theory);
+
 auto copy(const NFA &nfa, std::unordered_map<NFA::State *, NFA::State *> *uMap = nullptr) -> NFA;
 
 #endif /* NFA_UTILS_HPP */

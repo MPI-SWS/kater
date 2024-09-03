@@ -19,9 +19,9 @@
 #ifndef KATER_THEORY_HPP
 #define KATER_THEORY_HPP
 
-#include "Constraint.hpp"
 #include "Predicate.hpp"
 #include "Relation.hpp"
+#include "Statement.hpp"
 #include "VSet.hpp"
 
 #include <cassert>
@@ -95,24 +95,17 @@ public:
 		relations_[r.getID()].codom.insert(codom);
 	}
 
-	// Handle "assume c" declaration in the input file
-	void registerAssume(std::unique_ptr<Constraint> c) { assumes_.push_back(std::move(c)); }
-
-	/* Sometimes it's convenient to have temporary/removable
-	 * assumes (for internal checks) */
-	void registerTempAssume(std::unique_ptr<Constraint> c)
+	// Registers an "assume c" declaration
+	void registerAssume(std::unique_ptr<AssumeStatement> assm)
 	{
-		tempAssumes_.insert(&*c);
-		assumes_.push_back(std::move(c));
+		assumes_.push_back(std::move(assm));
 	}
 
 	void clearTempAssumes()
 	{
-		assumes_.erase(
-			std::remove_if(assumes_.begin(), assumes_.end(),
-				       [&](auto &cUP) { return tempAssumes_.count(&*cUP) > 0; }),
-			assumes_.end());
-		tempAssumes_.clear();
+		assumes_.erase(std::remove_if(assume_begin(), assume_end(),
+					      [&](auto &stmtUP) { return stmtUP->isTemporary(); }),
+			       assume_end());
 	}
 
 	void registerDisjointPreds(VSet<Predicate::ID> preds)
@@ -184,6 +177,8 @@ public:
 		return std::ranges::find(invalidPreds_, preds) == invalidPreds_.end();
 	}
 
+	auto isEco(const TransLabel &lab) const -> bool;
+
 	auto hasInfo(const Relation &r) const -> bool { return relations_.contains(r.getID()); }
 
 	auto hasInfo(const Predicate &p) const -> bool { return predicates_.contains(p.getID()); }
@@ -231,12 +226,12 @@ public:
 private:
 	/** If CST contains domain/codomain information, incorporates it
 	 * to the relevant assumptions. Returns whether that was the case. */
-	auto tryIncorporateDomAssumption(const Constraint *cst) -> bool;
+	auto tryIncorporateDomAssumption(const AssumeStatement *assm) -> bool;
 
 	/** If CST contains information about incompatible predicates,
 	 * it incorporates it to the relevant assumptions. Returns whether
 	 * that was the case. */
-	auto tryIncorporateIncompatAssumption(const Constraint *cst) -> bool;
+	auto tryIncorporateIncompatAssumption(const AssumeStatement *assm) -> bool;
 
 	/* It is tempting to use Relation as Key below; doing so, however,
 	 * would force us to store duplicate information (for the reverse relation) */
@@ -247,8 +242,7 @@ private:
 	VSet<VSet<Predicate::ID>> disjointPreds_{};
 	VSet<VSet<Predicate::ID>> invalidPreds_{};
 
-	std::vector<std::unique_ptr<Constraint>> assumes_;
-	VSet<Constraint *> tempAssumes_;
+	std::vector<std::unique_ptr<AssumeStatement>> assumes_{};
 };
 
 #endif /* KATER_THEORY_HPP */

@@ -50,7 +50,7 @@
 (setq kat-font-lock-keywords
       (let* (
             ;; define several category of keywords
-            (x-keywords '("let" "save" "view" "relation" "predicate" "disjoint" "assume""assert" "export"))
+            (x-keywords '("let" "rec" "and" "save" "view" "relation" "predicate" "disjoint" "assume""assert" "export" "extra"))
             (x-types '())
             (x-constants '("include"))
             (x-events '("R" "W" "F" "UR" "UW" "TJ" "TB" "TE" "TC" "NA"
@@ -79,7 +79,7 @@
   "Indent current line as kat code"
   (interactive)
   (beginning-of-line)
-  (if (looking-at "^[ \t]*\\(include\\|assume\\|view\\|let\\|save\\|assert\\|export\\|relation\\|predicate\\|coherence\\|check\\|acyclic\\|error\\|warning\\|//\\)")
+  (if (looking-at "^[ \t]*\\(include\\|assume\\|view\\|let\\|and\\|save\\|assert\\|export\\|relation\\|predicate\\|coherence\\|check\\|acyclic\\|error\\|warning\\|//\\)")
       (indent-line-to 0)
     (let ((not-indented t) cur-indent)
       (progn
@@ -107,11 +107,11 @@
 	(modify-syntax-entry ?- "w" st)
         st))
 
-
 ;;;###autoload
 (define-derived-mode kat-mode fundamental-mode "kat"
   "Major mode for editing kat files"
 
+  (set (make-local-variable 'comment-start) "// ")
   (set-syntax-table kat-mode-syntax-table)
   (set (make-local-variable 'font-lock-defaults) '(kat-font-lock-keywords))
   (set (make-local-variable 'indent-line-function) 'kat-indent-line)

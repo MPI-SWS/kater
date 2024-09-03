@@ -21,6 +21,17 @@
 #include <numeric>
 #include <ranges>
 
+auto Theory::isEco(const TransLabel &label) const -> bool
+{
+	if (label.isPredicate())
+		return false;
+
+	auto rel = *label.getRelation();
+	return isIncludedIn(rel, Relation::createBuiltin(Relation::BuiltinID::rf)) ||
+	       isIncludedIn(rel, Relation::createBuiltin(Relation::BuiltinID::mo)) ||
+	       isIncludedIn(rel, Relation::createBuiltin(Relation::BuiltinID::fr));
+}
+
 auto Theory::isIncludedIn(const Relation &a, const Relation &b) const -> bool
 {
 	using RB = Relation::BuiltinID;
@@ -59,13 +70,20 @@ auto Theory::isIncludedIn(const Relation &a, const Relation &b) const -> bool
 	if (rb == RB::rf && (lb == RB::rfi || lb == RB::rfe)) {
 		return true;
 	}
-
-	/* moi, rfi, fri <= po,po-loc */
-	if ((rb == RB::po_imm || rb == RB::po_loc_imm) && RB::WithinPoBegin <= lb &&
-	    lb <= RB::WithinPoLast) {
+	/* moe, moi, mo_imm <= mo */
+	if (rb == RB::mo && (lb == RB::moi || lb == RB::moe || lb == RB::mo_imm)) {
+		return true;
+	}
+	/* fre, fri, fr_imm <= fr */
+	if (rb == RB::fr && (lb == RB::fri || lb == RB::fre || lb == RB::fr_imm)) {
 		return true;
 	}
 
+	/* moi, rfi, fri, po_imm, po_loc_imm, po_loc, rmw <= po,po-loc */
+	if ((rb == RB::po || rb == RB::po_loc) && RB::WithinPoBegin <= lb &&
+	    lb <= RB::WithinPoLast) {
+		return true;
+	}
 	return false;
 }
 
@@ -173,13 +191,14 @@ auto Theory::composes(const TransLabel &a, const TransLabel &b) const -> bool
 		composes(a.getPostChecks(), getDomain(*b.getRelation())));
 }
 
-auto Theory::tryIncorporateDomAssumption(const Constraint *cst) -> bool
+auto Theory::tryIncorporateDomAssumption(const AssumeStatement *assm) -> bool
 {
 	/*
 	 * LHS has to be a base relation; RHS a base or a sequence.
 	 * (Given the parsing assumption, RHS will be a sequence but this
 	 * function can be a bit more generic.)
 	 */
+	auto *cst = assm->getConstraint();
 	const auto *subsetC = dynamic_cast<const SubsetConstraint *>(cst);
 	if (!subsetC || !dynamic_cast<const CharRE *>(subsetC->getLHS()) ||
 	    (!dynamic_cast<const SeqRE *>(subsetC->getRHS()) &&
@@ -236,14 +255,18 @@ auto Theory::tryIncorporateDomAssumption(const Constraint *cst) -> bool
 	return true;
 }
 
-auto Theory::tryIncorporateIncompatAssumption(const Constraint *cst) -> bool
+auto Theory::tryIncorporateIncompatAssumption(const AssumeStatement *assm) -> bool
 {
-	if (!cst->isEmpty() || !dynamic_cast<const SeqRE *>(cst->getKid(0)) ||
-	    std::ranges::any_of(cst->getKid(0)->kids(),
+	if (!assm->getConstraint()->isEmpty())
+		return false;
+
+	const auto *cst = dynamic_cast<const SubsetConstraint *>(assm->getConstraint());
+	if (!dynamic_cast<const SeqRE *>(cst->getLHS()) ||
+	    std::ranges::any_of(cst->getLHS()->kids(),
 				[&](auto &re) { return !re->isPredicate(); }))
 		return false;
 
-	const auto *seqRE = dynamic_cast<const SeqRE *>(cst->getKid(0));
+	const auto *seqRE = dynamic_cast<const SeqRE *>(cst->getLHS());
 	assert(std::ranges::all_of(seqRE->kids(), [](auto &re) {
 		return re->isPredicate() &&
 		       dynamic_cast<const CharRE *>(&*re)->getLabel().getPreChecks().size() == 1;
@@ -277,9 +300,9 @@ auto Theory::simplify() -> Theory &
 	 *   - r <= [A];r;[B], where r is some base relation ([A] and [B] are optional)
 	 *   - [A;...;B] <= 0
 	 */
-	auto isDroppable = [this](auto &cstUP) {
-		return tryIncorporateDomAssumption(&*cstUP) ||
-		       tryIncorporateIncompatAssumption(&*cstUP);
+	auto isDroppable = [this](auto &stmtUP) {
+		return tryIncorporateDomAssumption(&*stmtUP) ||
+		       tryIncorporateIncompatAssumption(&*stmtUP);
 	};
 
 	assumes_.erase(std::remove_if(assume_begin(), assume_end(), isDroppable), assume_end());

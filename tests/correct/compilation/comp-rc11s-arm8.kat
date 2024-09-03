@@ -3,6 +3,6 @@ include "../../../kat/arm8.kat"
 
 let eco = (rf | mo |fr)+
 
-assume rfi;[UR];po-imm;[UW] <= mo-imm
+assume rfi;rmw <= mo
 
 assert [R|W];rc11::psc_strong;[R|W] <= arm8::ob* | eco*;po?;eco*

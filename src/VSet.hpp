@@ -80,6 +80,13 @@ public:
 		return (it == end() || *it != el) ? std::make_pair(vset_.insert(it, el), true)
 						  : std::make_pair(it, false);
 	}
+	auto insert(T &&el) -> std::pair<const_iterator, bool>
+	{
+		auto it = std::lower_bound(begin(), end(), el);
+		return (it == end() || *it != el)
+			       ? std::make_pair(vset_.insert(it, std::forward<T>(el)), true)
+			       : std::make_pair(it, false);
+	}
 
 	template <typename ITER> void insert(ITER begin, ITER end)
 	{

@@ -1,0 +1,11 @@
+// tests a simple decomposition
+
+let rec r =
+	r_scpo ; [SC]
+and r_scpo =
+	r_sc ; po |
+	r_scpo ; po
+and r_sc =
+	r? ; [SC]
+
+assert r = [SC];po;[SC]

@@ -5,6 +5,6 @@ include "../../../kat/imm.kat"
 
 // assume [R;SC] = 0
 // assume [W;SC] = 0
-assume rf;rmw <= mo-imm
+assume rf;rmw <= mo
 
 assert imm::psc <= arm8::ob*

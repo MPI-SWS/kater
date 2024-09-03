@@ -23,8 +23,11 @@
 #include "KatModule.hpp"
 #include "Parser.hpp"
 #include "TransLabel.hpp"
+#include "Utils.hpp"
 #include <algorithm>
 #include <memory>
+#include <ostream>
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -50,11 +53,161 @@ private:
 	};
 
 public:
-	using UCO = KatModule::UCO;
-
 	ParsingDriver();
 
 	auto getLocation() -> yy::location & { return location; }
+
+	auto getRegisteredREOrCreateTmpRec(const std::string id, const yy::location &loc)
+		-> std::unique_ptr<RegExp>
+	{
+		auto getMaybeQualifiedRE = [&](auto &id) {
+			auto e = getModule()->getRegisteredRE(getQualifiedName(id));
+			if (e)
+				return e->clone();
+			e = getModule()->getRegisteredRE(id);
+			return e ? e->clone() : nullptr;
+		};
+
+		// If regexp does not exist, register it, but keep
+		// track of it to ensure it's used in let rec
+		auto re = getMaybeQualifiedRE(id);
+		if (!re) {
+			registerRelation(id, "", loc);
+			recRels_.insert(findRegisteredRE(id));
+			return findRegisteredRE(id)->clone();
+		}
+
+		// If already registered, ensure it's not hidden
+		auto *charRE = dynamic_cast<const CharRE *>(&*re);
+		if (!charRE)
+			return re;
+		auto &relOpt = charRE->getLabel().getRelation();
+		auto &theory = getModule()->getTheory();
+		if (relOpt.has_value() && theory.hasInfo(*relOpt) &&
+		    theory.getInfo(*relOpt).hidden) {
+			std::cerr << loc << ": ";
+			std::cerr << "forbidden use of internal relation (" << id << ")\n";
+			exit(EPARSE);
+		}
+		return re;
+	}
+
+	auto getRegisteredIDAsPredicate(const std::string &id, const yy::location &loc) -> Predicate
+	{
+		const auto *p = findRegisteredRE(id);
+		if (!p) {
+			std::cerr << loc << ": ";
+			std::cerr << "undeclared predicate used in disjoint clause (" << id
+				  << ")\n";
+			exit(EPARSE);
+		}
+		if (!p->isPredicate()) {
+			std::cerr << loc << ": ";
+			std::cerr << "non-basic predicate used in disjoint clause (" << id << ")\n";
+			exit(EPARSE);
+		}
+		const auto *charRE = dynamic_cast<const CharRE *>(p);
+		const auto &lab = charRE->getLabel();
+		assert(!lab.hasPostChecks());
+		assert(lab.isPredicate());
+		assert(lab.getPreChecks().size() == 1);
+		return *charRE->getLabel().getPreChecks().begin();
+	}
+
+	void registerRelation(const std::string &id, const std::string &printID,
+			      const yy::location &loc)
+	{
+		checkRelationDeclaration(id, printID, loc);
+
+		RelationInfo info;
+		info.name = getQualifiedName(id);
+		info.genmc.succ = printID;
+		info.genmc.pred = printID;
+		info.dbg = {loc.end.filename, loc.end.line};
+		getModule()->registerRelation(Relation::createUser(), std::move(info));
+	}
+
+	void registerPredicate(const std::string &id, const std::string &printID,
+			       const yy::location &loc)
+	{
+		checkPredicateDeclaration(id, printID, loc);
+
+		PredicateInfo info;
+		info.name = getQualifiedName(id);
+		info.genmc = printID;
+		info.dbg = {loc.end.filename, loc.end.line};
+		getModule()->registerPredicate(Predicate::createUser(), std::move(info));
+	}
+
+	void registerDerived(std::unique_ptr<LetStatement> let, const yy::location &loc);
+
+	void registerViewDerived(std::unique_ptr<LetStatement> let, const yy::location &loc)
+	{
+		let->setName(getQualifiedName(let->getName()));
+		checkDerivedDeclaration(let->getName(), let->getRE(), loc);
+		getModule()->registerLet(std::move(let));
+	}
+
+	void registerRecDerived(std::vector<std::pair<std::string, std::unique_ptr<RegExp>>> defs,
+				const yy::location &loc);
+
+	void
+	registerRecViewDerived(std::vector<std::pair<std::string, std::unique_ptr<RegExp>>> defs,
+			       const yy::location &loc);
+
+	// Handle "assert c" declaration in the input file
+	void registerAssert(std::unique_ptr<AssertStatement> assrt)
+	{
+		getModule()->registerAssert(std::move(assrt));
+	}
+
+	// Handle "assume c" declaration in the input file
+	void registerAssume(std::unique_ptr<AssumeStatement> assm)
+	{
+		getModule()->getTheory().registerAssume(std::move(assm));
+	}
+
+	void registerDisjointPreds(VSet<Predicate::ID> disjoint)
+	{
+		getModule()->getTheory().registerDisjointPreds(std::move(disjoint));
+	}
+
+	// Handle consistency constraint in the input file
+	void registerExport(std::unique_ptr<ExportStatement> exp, const yy::location &loc)
+	{
+		auto *cohCst = dynamic_cast<CoherenceConstraint *>(exp->getConstraint());
+		if (cohCst && !findRegisteredStatement(cohCst->getID())) {
+			std::cerr << loc << ": ";
+			std::cerr << "Uknown relation used for coherence constraint\n";
+			exit(EPARSE);
+		}
+		if (cohCst && exp->isExtra()) {
+			std::cerr << loc << ": ";
+			std::cerr << "extra coherence constraints are unsupported\n";
+			exit(EPARSE);
+		}
+		if (cohCst && getModule()->getCOHDeclaration()) {
+			std::cerr << loc << ": ";
+			std::cerr << "Only one coherence constraint is supported\n";
+			exit(EPARSE);
+		}
+		/* Fix the name for the constraint --- maybe needs qualification */
+		if (cohCst) {
+			cohCst->setID(findRegisteredStatement(cohCst->getID())->getName());
+		}
+		getModule()->registerExport(std::move(exp), loc);
+	}
+
+	/* Invoke the parser on INPUT. Return 0 on success. */
+	auto parse(const std::string &input) -> int;
+
+	auto takeModule() -> std::unique_ptr<KatModule> { return std::move(module_); }
+
+private:
+	[[nodiscard]] auto tmp_recs() const { return std::ranges::ref_view(recRels_); }
+
+	[[nodiscard]] auto getModule() const -> const KatModule * { return module_.get(); }
+	auto getModule() -> KatModule * { return module_.get(); }
 
 	[[nodiscard]] auto getPrefix() const -> const std::string & { return prefix; }
 
@@ -62,120 +215,44 @@ public:
 	{
 		return getPrefix() + "::" + id;
 	}
-	[[nodiscard]] static std::string getUnqualifiedName(const std::string &id)
+	[[nodiscard]] static auto getUnqualifiedName(const std::string &id) -> std::string
 	{
 		auto c = id.find_last_of(':');
 		return id.substr(c != std::string::npos ? c + 1 : c, std::string::npos);
 	}
 
-	void registerRelation(const std::string &id)
+	[[nodiscard]] auto isTmpRecursive(const RegExp *re) const -> bool
 	{
-		RelationInfo info;
-		info.name = getQualifiedName(id);
-		module->registerRelation(Relation::createUser(), std::move(info));
+		return std::ranges::any_of(recRels_, [&](auto *recRel) { return *recRel == *re; });
 	}
 
-	void registerPredicate(const std::string &id, const std::string &printID)
+	void clearTmpRecursive() { recRels_.clear(); }
+
+	[[nodiscard]] auto findRegisteredRE(const std::string &id) const -> const RegExp *
 	{
-		PredicateInfo info;
-		info.name = getQualifiedName(id);
-		info.genmc = printID;
-		module->registerPredicate(Predicate::createUser(), std::move(info));
+		const auto *e = getModule()->getRegisteredRE(getQualifiedName(id));
+		return e ? e : getModule()->getRegisteredRE(id);
+	}
+	[[nodiscard]] auto findRegisteredStatement(const std::string &id) const
+		-> const LetStatement *
+	{
+		const auto *e = getModule()->getRegisteredStatement(getQualifiedName(id));
+		return e ? e : getModule()->getRegisteredStatement(id);
 	}
 
-	void registerDerived(const std::string &id, URE re)
-	{
-		module->registerDerived(getQualifiedName(id), std::move(re));
-	}
+	void checkPredicateDeclaration(const std::string &id, const std::string &printID,
+				       const yy::location &loc);
+	void checkRelationDeclaration(const std::string &id, const std::string &printID,
+				      const yy::location &loc);
+	void checkDerivedDeclaration(const std::string &id, const RegExp *re,
+				     const yy::location &loc);
+	void checkViewDeclaration(const std::string &id, const RegExp *re, const yy::location &loc);
+	void checkMutRecDeclaration(
+		const std::vector<std::pair<std::string, std::unique_ptr<RegExp>>> &defs,
+		const yy::location &loc);
+	void checkMutRecDisjunctLeftRec(const std::string &id, const RegExp *re,
+					const VSet<Relation> &recs, const yy::location &loc);
 
-	void registerSaveDerived(const std::string &idSave, const std::string &idRed, URE re,
-				 const yy::location &loc)
-	{
-		if (!idRed.empty() && idRed != idSave && !isAllowedReduction(idRed)) {
-			std::cerr << loc << ": ";
-			std::cerr << "forbidden reduction encountered \"" << idRed << "\"\n";
-			exit(EXIT_FAILURE);
-		}
-		if (!idRed.empty()) {
-			std::string rname;
-			if (idRed == idSave || module->getRegisteredID(getQualifiedName(idRed))) {
-				rname = getQualifiedName(idRed);
-			} else {
-				rname = idRed;
-			}
-			if (idRed != idSave) {
-				getRegisteredID(rname, loc); // ensure exists
-			}
-
-			module->registerSaveReduceDerived(getQualifiedName(idSave), rname,
-							  std::move(re));
-		} else {
-			module->registerSaveDerived(getQualifiedName(idSave), std::move(re));
-		}
-	}
-
-	void registerViewDerived(const std::string &id, URE re)
-	{
-		module->registerViewDerived(getQualifiedName(id), std::move(re));
-	}
-
-	// Handle "assert c" declaration in the input file
-	void registerAssert(UCO c, const yy::location &loc)
-	{
-		module->registerAssert(std::move(c), loc);
-	}
-
-	// Handle "assume c" declaration in the input file
-	void registerAssume(UCO c, const yy::location & /*loc*/)
-	{
-		module->getTheory().registerAssume(std::move(c));
-	}
-
-	void registerDisjointPreds(VSet<Predicate::ID> disjoint)
-	{
-		module->getTheory().registerDisjointPreds(std::move(disjoint));
-	}
-
-	// Handle consistency constraint in the input file
-	void registerExport(UCO c, const yy::location &loc) { module->registerExport(&*c, loc); }
-
-	auto getRegisteredID(const std::string &id, const yy::location &loc) -> URE
-	{
-		auto e = module->getRegisteredID(getQualifiedName(id));
-		if (!e) {
-			auto f = module->getRegisteredID(id);
-			if (!f) {
-				std::cerr << loc << ": ";
-				std::cerr << "unknown relation encountered (" << id << ")\n";
-				exit(EXIT_FAILURE);
-			}
-			e = std::move(f);
-		}
-		return std::move(e);
-	}
-
-	auto getRegisteredIDAsPredicate(const std::string &id, const yy::location &loc) -> Predicate
-	{
-		auto p = getRegisteredID(id, loc);
-		if (!p->isPredicate()) {
-			std::cerr << loc << ": ";
-			std::cerr << "non-basic predicate used in disjoint clause (" << id << ")\n";
-			exit(EXIT_FAILURE);
-		}
-		auto *charRE = dynamic_cast<CharRE *>(&*p);
-		auto &lab = charRE->getLabel();
-		assert(!lab.hasPostChecks());
-		assert(lab.isPredicate());
-		assert(lab.getPreChecks().size() == 1);
-		return *charRE->getLabel().getPreChecks().begin();
-	}
-
-	/* Invoke the parser on INPUT. Return 0 on success. */
-	auto parse(const std::string &input) -> int;
-
-	auto takeModule() -> std::unique_ptr<KatModule> { return std::move(module); }
-
-private:
 	static auto isAllowedReduction(const std::string &idRed) -> bool
 	{
 		auto id = getUnqualifiedName(idRed);
@@ -186,17 +263,22 @@ private:
 	void restoreState();
 
 	/* Location for lexing/parsing */
-	yy::location location;
+	yy::location location{};
 
 	/* Current source file directory (used for includes) */
-	std::string dir;
+	std::string dir{};
 
 	/* Current name prefix */
-	std::string prefix;
+	std::string prefix{};
 
-	std::unique_ptr<KatModule> module;
+	/* Temporary symbols stored during parsing */
+	VSet<const RegExp *> recRels_;
 
-	std::vector<State> states;
+	/* The module build out of parsing */
+	std::unique_ptr<KatModule> module_{};
+
+	/* Parser state (for recursive calls) */
+	std::vector<State> states{};
 };
 
 #endif /* PARSING_DRIVER_HPP */

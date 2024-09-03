@@ -1,0 +1,7 @@
+include "../../../kat/tso.kat"
+include "../../../kat/rc11.kat"
+
+let eco = (rf | mo | fr)*
+assume [W];po <= [W];po;[F]
+
+assert rc11::psc+ <= tso::tso+  // | (eco;po;eco) | po;eco;po

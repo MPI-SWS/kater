@@ -6,6 +6,21 @@ released.
 
 ## [Unreleased]
 
+## [0.3] - 2024.09.03
+### Added
+
+- Support for mutually recursive relations via `let rec`
+- Support for `extra` acyclicity exports
+
+### Changed
+
+- Using immediate relations (e.g., `po-imm`, `mo-imm`, etc) is now forbidden
+- Different code export for GenMC
+
+### Fixes
+
+- Various bug fixes (e.g., for assertion checking)
+
 ## [0.2] - 2024.02.12
 ### Added
 

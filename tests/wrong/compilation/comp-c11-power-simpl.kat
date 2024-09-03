@@ -1,7 +1,7 @@
-include "../../kat/c11-old.kat"
-include "../../kat/power-fm-simpl.kat"
+include "../../../kat/c11-old.kat"
+include "../../../kat/power-fm-simpl.kat"
 
-assume rf;rmw <= mo-imm
+assume rf;rmw <= mo
 
 // The commented-out clauses on the RHS discard "uninteresting" counterexamples
 assert [R|W];c11-old::psc+;[R|W] & id <= power-fm-simpl::ar |

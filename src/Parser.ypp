@@ -1,3 +1,4 @@
+// clang-format off
 %skeleton "lalr1.cc" // -*- C++ -*-
 %require "3.2"
 
@@ -56,21 +57,23 @@
 
 %token
   ACYCLIC   "acyclic"
+  REC_AND   "and"
   ASSUME    "assume"
   ASSERT    "assert"
   COHERENCE "coherence"
   DISJOINT  "disjoint"
   ERROR	    "error"
   EXPORT    "export"
+  EXTRA     "extra"
   GENMC     "genmc"
   ID_REL    "id"
   INCLUDE   "include"
   LET	    "let"
   PREDICATE "predicate"
+  REC       "rec"
   RECOVERY  "recovery"
   RELATION  "relation"
   ROT       "rot"
-  SAVE      "save"
   TOTAL     "total"
   VIEW      "view"
   UNLESS    "unless"
@@ -104,13 +107,15 @@
 %nterm <std::string> qualified_ID;
 %nterm <std::string> print_ID;
 %nterm <std::unique_ptr<RegExp>> rel;
+%nterm <std::pair<std::string, std::unique_ptr<RegExp>>> def;
+%nterm <std::vector<std::pair<std::string, std::unique_ptr<RegExp>>>> def_list;
 %nterm <VSet<Predicate::ID>> pred_list;
 %nterm <std::unique_ptr<Constraint>> assert_constraint;
 %nterm <std::unique_ptr<Constraint>> assume_constraint;
 %nterm <std::unique_ptr<Constraint>> export_constraint;
 %nterm <std::unique_ptr<Constraint>> unless_clause;
 %nterm <std::unique_ptr<Constraint>> unless_opt;
-%nterm <std::string> reduce_opt;
+%nterm <std::optional<std::string>> as_extra_opt;
 
 %precedence "=" "<="
 %left  "|"
@@ -121,6 +126,9 @@
 
 %printer { yyo << *($$); } <std::unique_ptr<RegExp>>;
 %printer { yyo << *($$); } <std::unique_ptr<Constraint>>;
+%printer { yyo << "<" << ($$).first << ", " << *($$).second; } <std::pair<std::string, std::unique_ptr<RegExp>>>;
+%printer { for (auto &s : $$) yyo << s.first << *s.second << " "; } <std::vector<std::pair<std::string, std::unique_ptr<RegExp>>>>;
+%printer { yyo << $$.has_value() ? *$$ : ""; } <std::optional<std::string>>;
 %printer { yyo << $$; } <*>;
 
 %start main
@@ -131,27 +139,31 @@ main:	  %empty		{ }
         ;
 
 decl:     "include" QSTRING                { drv.parse($2.substr(1, $2.size()-2)); }
-	| "let" ID "=" rel                 { drv.registerDerived($2, std::move($4)); }
-	| "relation" ID                    { drv.registerRelation($2); }
-	| "predicate" ID print_ID          { drv.registerPredicate(std::move($2), std::move($3)); }
+	| "relation" ID print_ID           { drv.registerRelation($2, std::move($3), @$); }
+	| "predicate" ID print_ID          { drv.registerPredicate(std::move($2), std::move($3), @$); }
 	| "disjoint" pred_list             { drv.registerDisjointPreds($2); }
-	| "save" reduce_opt ID "=" rel     { drv.registerSaveDerived($3, $2, std::move($5), @$); }
-	| "view" ID "=" rel		   { drv.registerViewDerived($2, std::move($4)); }
-	| "assume" assume_constraint	   { drv.registerAssume(std::move($2), @$); }
-	| "assert" assert_constraint	   { drv.registerAssert(std::move($2), @$); }
-	| "export" export_constraint	   { drv.registerExport(std::move($2), @$); }
+	| "let" def                        { drv.registerDerived(LetStatement::create(std::move($2.first), std::move($2.second), NoSavedExp::create(), DbgInfo(@$.end.filename, @$.end.line)), @$); }
+	| "let" "rec" def_list             { drv.registerRecDerived(std::move($3), @$);	}
+	| "view" def			   { drv.registerViewDerived(LetStatement::create(std::move($2.first), $2.second->clone(), ViewExp::create($2.second->clone()), DbgInfo(@$.end.filename, @$.end.line)), @$); }
+	| "view" "rec" def_list		   { drv.registerRecViewDerived(std::move($3), @$); }
+	| "assume" assume_constraint	   { drv.registerAssume(AssumeStatement::create(std::move($2), false)); }
+	| "assert" assert_constraint	   { drv.registerAssert(AssertStatement::create(std::move($2), DbgInfo(@$.end.filename, @$.end.line))); }
+	| "export" as_extra_opt export_constraint unless_opt print_ID { drv.registerExport(ExportStatement::create(std::move($3), std::move($4), std::move($5), std::move($2)), @$); }
+	;
+
+def:      ID "=" rel { $$ = std::make_pair(std::move($1), std::move($3)); }
+	;
+
+def_list: def                            { std::vector<std::pair<std::string, std::unique_ptr<RegExp>>> ps; ps.push_back(std::move($1)); $$ = std::move(ps); }
+	| def_list "and" def             { $1.push_back(std::move($3)); $$ = std::move($1); }
 	;
 
 pred_list: qualified_ID                  { $$ = combinePredSets({}, drv.getRegisteredIDAsPredicate(std::move($1), @$), @$); }
 	| pred_list POUND qualified_ID   { $$ = combinePredSets(std::move($1), drv.getRegisteredIDAsPredicate(std::move($3), @$), @$); }
 
-reduce_opt: %empty	        { $$ = ""; }
-	| "[" qualified_ID "]"	{ $$ = $2; }
-	;
-
 assert_constraint:
-	  rel "=" rel		{ $$ = EqualityConstraint::createOpt(std::move($1), std::move($3), false); }
-	| rel "<=" rel		{ $$ = SubsetConstraint::createOpt(std::move($1), std::move($3), false); }
+	  rel "=" rel		{ $$ = EqualityConstraint::createOpt(std::move($1), std::move($3), false, false); }
+	| rel "<=" rel		{ $$ = SubsetConstraint::createOpt(std::move($1), std::move($3), false, false); }
 	;
 
 assume_constraint:
@@ -159,12 +171,16 @@ assume_constraint:
 	| "total" rel		{ $$ = TotalityConstraint::createOpt(std::move($2)); }
 	;
 
+as_extra_opt: %empty { $$ = std::nullopt; }
+	| "extra" ID { $$ = std::move($2); }
+	;
+
 export_constraint:
-	  "acyclic" rel unless_opt print_ID { $$ = AcyclicConstraint::createOpt(std::move($2), std::move($3), std::move($4)); }
-	| "recovery" rel	     { $$ = RecoveryConstraint::create(std::move($2)); }
-	| "coherence" rel	     { $$ = CoherenceConstraint::create(std::move($2)); }
-        | "error" ID unless_clause   { $$ = ErrorConstraint::create(std::move($3), $2); }
-	| "warning" ID unless_clause { $$ = WarningConstraint::create(std::move($3), $2); }
+	  "acyclic" rel      { $$ = AcyclicConstraint::createOpt(std::move($2)); }
+	| "coherence" ID     { $$ = CoherenceConstraint::create(std::move($2)); }
+        | "error" ID 	     { $$ = ErrorConstraint::create($2); }
+	| "warning" ID 	     { $$ = WarningConstraint::create($2); }
+	| assert_constraint  { $$ = std::move($1); }
 	;
 
 unless_clause:
@@ -177,7 +193,7 @@ unless_opt: %empty      { $$ = nullptr; }
 
 rel:	  "0"			{ $$ = RegExp::createFalse(); }
 	| "id"			{ $$ = RegExp::createId(); }
-	| qualified_ID		{ $$ = drv.getRegisteredID($1, @$); }
+	| qualified_ID		{ $$ = drv.getRegisteredREOrCreateTmpRec(std::move($1), @$); }
 	| "(" rel ")"		{ $$ = std::move($2); }
 	| "[" rel "]"		{ $$ = std::move($2); /* bracket is a NOP for now */ }
 	| "[" "]"		{ $$ = RegExp::createId(); }
@@ -256,3 +272,4 @@ combinePredSets(VSet<Predicate::ID> current, Predicate p, const yy::location &lo
 	}
 	return current;
 }
+// clang-format on

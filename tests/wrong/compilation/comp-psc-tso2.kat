@@ -1,5 +1,5 @@
-include "../../kat/tso.kat"
-include "../../kat/rc11.kat"
+include "../../../kat/tso.kat"
+include "../../../kat/rc11.kat"
 
 assume po?;[R] <= [F];po;[R]
   // [W];po <= [W];po;[F]

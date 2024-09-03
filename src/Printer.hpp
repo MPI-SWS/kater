@@ -19,87 +19,32 @@
 #ifndef KATER_PRINTER_HPP
 #define KATER_PRINTER_HPP
 
-#include "CNFAs.hpp"
-#include <fstream>
 #include <iostream>
-#include <optional>
 #include <string>
-#include <vector>
 
 class KatModule;
+class DFSParameters;
+class Config;
 
 class Printer {
+protected:
+	Printer(const KatModule &module, const Config &conf);
 
 public:
-	Printer(const KatModule &module, const std::string &dirPrefix,
-		const std::string &outPrefix);
+	/** Generates all consistency checking code from the module */
+	virtual void output() = 0;
 
-	/* Outputs RES */
-	void output(const CNFAs &cnfas);
+protected:
+	[[nodiscard]] auto getModule() const -> const KatModule & { return module_; }
+	[[nodiscard]] auto getConf() const -> const Config & { return config_; }
+	[[nodiscard]] auto getPrefix() const -> const std::string & { return prefix_; }
 
 private:
-	void printPredSet(std::ostream &ostr, const std::string &arg, const PredicateSet &ps);
-
-	void printRelation(std::ostream &ostr, const std::string &res, const std::string &arg,
-			   const TransLabel *r);
-	void printTransLabel(const TransLabel *t, const std::string &res, const std::string &arg);
-
-	static auto getCalcIdx(unsigned id) -> unsigned { return calcToIdxMap[id]; }
-
-	void printCalculatorHpp(const NFA &nfa, unsigned id, VarStatus status);
-	void printCalculatorCpp(const NFA &nfa, unsigned id, VarStatus status);
-
-	void printInclusionHpp(const NFA &lhs, const NFA &rhs, unsigned id,
-			       std::optional<unsigned> rhsViewIdx);
-	void printInclusionCpp(const NFA &lhs, const NFA &rhs, unsigned id,
-			       std::optional<unsigned> rhsViewIdx);
-
-	void printAcyclicHpp(const NFA &nfa, const std::optional<NFA> &unlessNFA,
-			     const std::string &genmc, unsigned id);
-	void printAcyclicCpp(const NFA &nfa, const std::optional<NFA> &unlessNFA,
-			     const std::string &genmc, unsigned id);
-
-	void printRecoveryHpp(const NFA &nfa);
-	void printRecoveryCpp(const NFA &nfa);
-
-	void printPPoRfHpp(const NFA &nfa, bool deps);
-	void printPPoRfCpp(const NFA &nfa, bool deps);
-
-	void printHppHeader();
-	void printCppHeader();
-
-	void printHppFooter();
-	void printCppFooter();
-
-	void outputHpp(const CNFAs &nfas);
-	void outputCpp(const CNFAs &cnfas);
-
-	auto hpp() -> std::ostream & { return *outHpp; }
-	auto cpp() -> std::ostream & { return *outCpp; }
-
-	auto getModule() const -> const KatModule & { return module_; }
-
 	const KatModule &module_;
+	const Config &config_;
 
 	/* Prefix for the names to be printed (class name, filenames, etc) */
-	std::string prefix;
-
-	/* Class name for resulting files */
-	std::string className;
-
-	/* Include-guard name for resulting files */
-	std::string guardName;
-
-	/* Streams for the header file */
-	std::ofstream foutHpp; /* only set if we're writing to a file */
-	std::ostream *outHpp = &std::cout;
-
-	/* Streams for the implementation file */
-	std::ofstream foutCpp; /* only set if we're writing to a file */
-	std::ostream *outCpp = &std::cout;
-
-	static std::vector<unsigned> calcToIdxMap;
-	std::unordered_set<unsigned> viewCalcs;
+	std::string prefix_;
 };
 
 #endif /* KATER_PRINTER_HPP */

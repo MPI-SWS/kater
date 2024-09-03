@@ -20,11 +20,14 @@
 #define KATER_REGEXP_HPP
 
 #include "NFA.hpp"
+#include "StatePair.hpp"
 #include "TransLabel.hpp"
+
 #include <cassert>
 #include <memory>
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
 #include <utility>
 
 /*******************************************************************************
@@ -37,6 +40,7 @@ class Theory;
 class RegExp {
 
 protected:
+	using RecStatesMap = std::unordered_map<Relation, NFA::State *, RelationHasher>;
 	RegExp(std::vector<std::unique_ptr<RegExp>> &&kids = {}) : kids_(std::move(kids)) {}
 
 public:
@@ -109,7 +113,13 @@ public:
 	}
 
 	/* Convert the RE to an NFA */
-	[[nodiscard]] virtual auto toNFA(const Theory &) const -> NFA = 0;
+	[[nodiscard]] auto toNFA() const -> NFA;
+
+	/* Helper for toNFA() fastpath --- not supposed to be called directly */
+	virtual auto toNFAFast() const -> NFA = 0;
+
+	/* Helper for toNFA() --- not supposed to be called directly */
+	virtual void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const = 0;
 
 	/* Returns a clone of the RE */
 	[[nodiscard]] virtual auto clone() const -> std::unique_ptr<RegExp> = 0;
@@ -124,7 +134,8 @@ public:
 	auto operator=(RegExp &&) -> RegExp & = default;
 
 	/* Dumps the RE */
-	virtual auto dump(std::ostream &s) const -> std::ostream & = 0;
+	virtual auto dump(std::ostream &s, const Theory *theory = nullptr) const
+		-> std::ostream & = 0;
 
 protected:
 	[[nodiscard]] virtual auto isEqual(const RegExp &other) const -> bool = 0;
@@ -148,7 +159,7 @@ inline auto operator<<(std::ostream &s, const RegExp &re) -> std::ostream & { re
 class CharRE : public RegExp {
 
 protected:
-	CharRE(const TransLabel &l) : lab(l) {}
+	CharRE(TransLabel l) : lab(std::move(l)) {}
 
 public:
 	template <typename... Ts> static auto create(Ts &&...params) -> std::unique_ptr<CharRE>
@@ -169,14 +180,23 @@ public:
 		return *this;
 	}
 
-	[[nodiscard]] auto toNFA(const Theory &) const -> NFA override { return NFA(lab); }
+	[[nodiscard]] auto toNFAFast() const -> NFA override { return {getLabel()}; }
+
+	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override
+	{
+		if (lab.isRelation() && recStates.contains(*lab.getRelation())) {
+			nfa.addEpsilonTransition(recStates[*lab.getRelation()], p.second);
+		} else {
+			nfa.addTransition(p.first, NFA::Transition(lab, p.second));
+		}
+	}
 
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
 	{
 		return create(getLabel());
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override { return s << getLabel(); }
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override;
 
 protected:
 	[[nodiscard]] auto isEqual(const RegExp &other) const -> bool override
@@ -210,6 +230,22 @@ public:
 
 	template <typename... Ts> static auto createOpt(Ts &&...params) -> std::unique_ptr<RegExp>;
 
+	[[nodiscard]] auto toNFAFast() const -> NFA override
+	{
+		NFA nfa;
+		for (const auto &k : getKids()) {
+			nfa.alt(std::move(k->toNFAFast()));
+		}
+		return nfa;
+	}
+
+	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override
+	{
+		for (const auto &k : getKids()) {
+			k->expandOnNFA(nfa, p, recStates);
+		}
+	}
+
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
 	{
 		std::vector<std::unique_ptr<RegExp>> nk;
@@ -219,23 +255,16 @@ public:
 		return create(std::move(nk));
 	}
 
-	[[nodiscard]] auto toNFA(const Theory &theory) const -> NFA override
-	{
-		NFA nfa;
-		for (const auto &k : getKids()) {
-			nfa.alt(std::move(k->toNFA(theory)));
-		}
-		return nfa;
-	}
-
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
 		if (getNumKids() == 0) {
 			return s << "0";
 		}
-		s << "(" << *getKid(0);
+		s << "(";
+		getKid(0)->dump(s, theory);
 		for (int i = 1; i < getNumKids(); i++) {
-			s << " | " << *getKid(i);
+			s << " | ";
+			getKid(i)->dump(s, theory);
 		}
 		return s << ")";
 	}
@@ -287,14 +316,25 @@ public:
 		return *this;
 	}
 
-	[[nodiscard]] auto toNFA(const Theory &theory) const -> NFA override
+	[[nodiscard]] auto toNFAFast() const -> NFA override
 	{
 		NFA nfa;
 		nfa.or_empty();
 		for (const auto &k : getKids()) {
-			nfa.seq(std::move(k->toNFA(theory)));
+			nfa.seq(std::move(k->toNFAFast()));
 		}
 		return nfa;
+	}
+
+	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override
+	{
+		NFA::State *prev = nullptr;
+		for (auto i = 0U; i < getNumKids(); i++) {
+			auto *s = (i == 0) ? p.first : prev;
+			auto *e = (i == getNumKids() - 1) ? p.second : nfa.createState();
+			getKid(i)->expandOnNFA(nfa, {s, e}, recStates);
+			prev = e;
+		}
 	}
 
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
@@ -306,14 +346,16 @@ public:
 		return create(std::move(nk));
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
 		if (getNumKids() == 0) {
 			return s << "<empty>";
 		}
-		s << "(" << *getKid(0);
+		s << "(";
+		getKid(0)->dump(s, theory);
 		for (int i = 1; i < getNumKids(); i++) {
-			s << " ; " << *getKid(i);
+			s << " ; ";
+			getKid(i)->dump(s, theory);
 		}
 		return s << ")";
 	}
@@ -378,12 +420,16 @@ public:
 	static auto createOpt(std::unique_ptr<RegExp> r1, std::unique_ptr<RegExp> r2)
 		-> std::unique_ptr<RegExp>;
 
-	[[nodiscard]] auto toNFA(const Theory &theory) const -> NFA override
+	[[nodiscard]] auto toNFAFast() const -> NFA override
+	{
+		std::cerr << "[Error] NFA conversion of and(&) expressions is not supported.\n";
+		return {};
+	}
+
+	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override
 	{
 		std::cerr << "[Error] NFA conversion of and(&) expressions is not supported."
 			  << std::endl;
-		NFA nfa1 = getKid(0)->toNFA(theory);
-		return nfa1;
 	}
 
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
@@ -391,9 +437,13 @@ public:
 		return create(getKid(0)->clone(), getKid(1)->clone());
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << "(" << *getKid(0) << " & " << *getKid(1) << ")";
+		s << "(";
+		getKid(0)->dump(s, theory);
+		s << " & ";
+		getKid(1)->dump(s, theory);
+		return s << ")";
 	}
 
 protected:
@@ -427,12 +477,16 @@ public:
 		return std::unique_ptr<MinusRE>(new MinusRE(std::forward<Ts>(params)...));
 	}
 
-	[[nodiscard]] auto toNFA(const Theory &theory) const -> NFA override
+	[[nodiscard]] auto toNFAFast() const -> NFA override
+	{
+		std::cerr << "[Error] NFA conversion of minus(\\) expressions is not supported.\n";
+		return {};
+	}
+
+	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override
 	{
 		std::cerr << "[Error] NFA conversion of minus(\\) expressions is not supported."
 			  << std::endl;
-		NFA nfa1 = getKid(0)->toNFA(theory);
-		return nfa1;
 	}
 
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
@@ -440,9 +494,13 @@ public:
 		return create(getKid(0)->clone(), getKid(1)->clone());
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << "(" << *getKid(0) << " \\ " << *getKid(1) << ")";
+		s << "(";
+		getKid(0)->dump(s, theory);
+		s << " \\ ";
+		getKid(1)->dump(s, theory);
+		return s << ")";
 	}
 
 protected:
@@ -463,7 +521,7 @@ protected:
  **                         Unary operations on REs
  ******************************************************************************/
 
-#define UNARY_RE(_class, _op, _str)                                                                \
+#define UNARY_RE(_class, _str)                                                                     \
 	class _class##RE : public RegExp {                                                         \
                                                                                                    \
 	protected:                                                                                 \
@@ -479,21 +537,19 @@ protected:
                                                                                                    \
 		static std::unique_ptr<RegExp> createOpt(std::unique_ptr<RegExp> r);               \
                                                                                                    \
-		NFA toNFA(const Theory &theory) const override                                     \
-		{                                                                                  \
-			NFA nfa = getKid(0)->toNFA(theory);                                        \
-			nfa._op();                                                                 \
-			return nfa;                                                                \
-		}                                                                                  \
+		[[nodiscard]] auto toNFAFast() const -> NFA override;                              \
+                                                                                                   \
+		void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override;    \
                                                                                                    \
 		std::unique_ptr<RegExp> clone() const override                                     \
 		{                                                                                  \
 			return create(getKid(0)->clone());                                         \
 		}                                                                                  \
                                                                                                    \
-		std::ostream &dump(std::ostream &s) const override                                 \
+		std::ostream &dump(std::ostream &s, const Theory *theory = nullptr) const override \
 		{                                                                                  \
-			return s << *getKid(0) << _str;                                            \
+			getKid(0)->dump(s, theory);                                                \
+			return s << _str;                                                          \
 		}                                                                                  \
                                                                                                    \
 	protected:                                                                                 \
@@ -510,47 +566,123 @@ protected:
 		}                                                                                  \
 	};
 
-UNARY_RE(Plus, plus, "+");
-UNARY_RE(Star, star, "*");
-UNARY_RE(QMark, or_empty, "?");
+UNARY_RE(Plus, "+");
+UNARY_RE(Star, "*");
+UNARY_RE(QMark, "?");
+UNARY_RE(Rot, "rot");
 
-class RotRE : public RegExp {
+inline void PlusRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const
+{
+	auto *s = nfa.createState();
+	auto *e = nfa.createState();
+	getKid(0)->expandOnNFA(nfa, {s, e}, recStates);
+	nfa.addEpsilonTransition(e, s);
+	nfa.addEpsilonTransition(p.first, s);
+	nfa.addEpsilonTransition(e, p.second);
+}
+
+inline void StarRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const
+{
+	auto *s = nfa.createState();
+	getKid(0)->expandOnNFA(nfa, {s, s}, recStates);
+	nfa.addEpsilonTransition(p.first, s);
+	nfa.addEpsilonTransition(s, p.second);
+}
+
+inline void QMarkRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const
+{
+	getKid(0)->expandOnNFA(nfa, p, recStates);
+	nfa.addEpsilonTransition(p.first, p.second);
+}
+
+inline void RotRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const
+{
+	std::cerr << "[Error] NFA conversion of rot expressions is not supported.\n";
+}
+
+inline auto PlusRE::toNFAFast() const -> NFA { return std::move(getKid(0)->toNFAFast().plus()); }
+inline auto StarRE::toNFAFast() const -> NFA { return std::move(getKid(0)->toNFAFast().star()); }
+inline auto QMarkRE::toNFAFast() const -> NFA
+{
+	return std::move(getKid(0)->toNFAFast().or_empty());
+}
+inline auto RotRE::toNFAFast() const -> NFA
+{
+	std::cerr << "[Error] NFA conversion of rot expressions is not supported.\n";
+	return {};
+}
+
+/*******************************************************************************
+ **                         Mutually recursive REs
+ ******************************************************************************/
+
+class MutRecRE : public RegExp {
 
 protected:
-	RotRE(std::unique_ptr<RegExp> r) { addKid(std::move(r)); }
-
-public:
-	template <typename... Ts> static auto create(Ts &&...params) -> std::unique_ptr<RotRE>
+	MutRecRE(Relation rel, std::vector<Relation> recs, std::vector<std::unique_ptr<RegExp>> res)
+		: rel_(rel), recursive_(std::move(recs))
 	{
-		return std::unique_ptr<RotRE>(new RotRE(std::forward<Ts>(params)...));
+		getKids() = std::move(res);
 	}
 
-	static auto createOpt(std::unique_ptr<RegExp> r) -> std::unique_ptr<RegExp>;
+public:
+	template <typename... Ts> static auto create(Ts &&...params) -> std::unique_ptr<MutRecRE>
+	{
+		return std::unique_ptr<MutRecRE>(new MutRecRE(std::forward<Ts>(params)...));
+	}
 
-	[[nodiscard]] auto toNFA(const Theory &theory) const -> NFA override;
+	static auto createOpt(Relation rel, std::vector<Relation> rels,
+			      std::vector<std::unique_ptr<RegExp>> res) -> std::unique_ptr<RegExp>;
+
+	[[nodiscard]] auto getRelation() const { return rel_; }
+
+	[[nodiscard]] auto recs() const { return std::ranges::ref_view(recursive_); }
+
+	[[nodiscard]] auto getRec(unsigned i) const { return recursive_[i]; }
+
+	[[nodiscard]] auto toNFAFast() const -> NFA override { abort(); }
+
+	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override;
 
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
 	{
-		return create(getKid(0)->clone());
+		std::vector<std::unique_ptr<RegExp>> newKids;
+		for (const auto &k : getKids())
+			newKids.push_back(k->clone());
+		return create(rel_, recursive_, std::move(newKids));
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << "rot(" << *getKid(0) << ")";
+		s << "rec@" << rel_.getID() << "[";
+		for (const auto &r : recursive_)
+			s << r.getID() << ",";
+		s << "\b]";
+		for (const auto &re : getKids()) {
+			re->dump(s, theory);
+			s << " & ";
+		}
+		s << "\b\b)";
+		return s;
 	}
 
 protected:
 	[[nodiscard]] auto isEqual(const RegExp &other) const -> bool override
 	{
-		const auto &o = dynamic_cast<const RotRE &>(other);
+		const auto &o = dynamic_cast<const MutRecRE &>(other);
 		auto i = 0U;
-		return getNumKids() == other.getNumKids() &&
+		return getRelation() == o.getRelation() && recursive_ == o.recursive_ &&
+		       getNumKids() == other.getNumKids() &&
 		       std::all_of(kid_begin(), kid_end(), [&](auto & /*k*/) {
 			       auto res = (*getKid(i) == *o.getKid(i));
 			       ++i;
 			       return res;
 		       });
 	}
+
+private:
+	Relation rel_;
+	std::vector<Relation> recursive_;
 };
 
 /*******************************************************************************
@@ -596,10 +728,12 @@ template <typename... Ts> auto SeqRE::createOpt(Ts &&...args) -> std::unique_ptr
 
 	// optimizations must be done separately; what if the user declares some combo invalid later
 	// on? have a module::dump() to inspect module before and after optimizations for (auto it =
-	// r.begin(); it != r.end() && it+1 != r.end(); /* */) { 	auto *p = dynamic_cast<CharRE
-	// *>(it->get()); 	auto *q = dynamic_cast<CharRE *>((it+1)->get()); 	if (p && q &&
-	// (p->getLabel().isPredicate() || q->getLabel().isPredicate())) { 		if
-	// (!p->getLabel().merge(q->getLabel())) { 			return RegExp::createFalse();
+	// r.begin(); it != r.end() && it+1 != r.end(); /* */) { 	auto *p =
+	// dynamic_cast<CharRE
+	// *>(it->get()); 	auto *q = dynamic_cast<CharRE *>((it+1)->get()); 	if (p && q
+	// && (p->getLabel().isPredicate() || q->getLabel().isPredicate())) { 		if
+	// (!p->getLabel().merge(q->getLabel())) { 			return
+	// RegExp::createFalse();
 	// 		}
 	// 		it = r.erase(it + 1);
 	// 		continue;

@@ -16,24 +16,29 @@
  * http://www.gnu.org/licenses/gpl-3.0.html.
  */
 
-#ifndef KATER_INCLUSION_HPP
-#define KATER_INCLUSION_HPP
+#ifndef KATER_STATE_PAIR_HPP
+#define KATER_STATE_PAIR_HPP
 
-#include <string>
+#include "NFA.hpp"
+
 #include <utility>
 
-#include "Constraint.hpp"
+using StatePair = std::pair<NFA::State *, NFA::State *>;
 
-template <typename T> struct Inclusion {
-	Inclusion(T &&lhs, T &&rhs, Constraint::Type t, std::string s)
-		: lhs(std::move(lhs)), rhs(std::move(rhs)), type(t), s(std::move(s))
+template <typename T> inline void hash_combine(std::size_t &seed, std::size_t value)
+{
+	std::hash<T> hasher;
+	seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
+struct StatePairHasher {
+	auto operator()(const StatePair &p) const -> std::size_t
 	{
+		std::size_t hash = 0;
+		hash_combine<unsigned>(hash, p.first->getId());
+		hash_combine<unsigned>(hash, p.first->getId());
+		return hash;
 	}
-
-	T lhs;
-	T rhs;
-	Constraint::Type type;
-	std::string s;
 };
 
-#endif /* KATER_INCLUSION_HPP */
+#endif /* KATER_STATE_PAIR_HPP */

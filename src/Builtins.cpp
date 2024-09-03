@@ -46,62 +46,75 @@ static const std::unordered_map<Relation::BuiltinID, RelationInfo> builtinRelati
 	  .locInfo = RelLocInfo::ChangesLoc,
 	  .dom = {},
 	  .codom = {},
+	  .hidden = true,
 	  .genmc = {"po_imm_succ", "po_imm_pred"}}},
+	{RB::po,
+	 {.name = "po",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {},
+	  .codom = {},
+	  .genmc = {"po_succs", "po_preds"}}},
 	{RB::po_loc_imm,
 	 {.name = "po-loc-imm",
 	  .arity = RelArity::OneOne,
 	  .locInfo = RelLocInfo::KeepsLoc,
 	  .dom = {},
 	  .codom = {},
-	  .genmc = {"poloc_imm_succs", "poloc_imm_preds"}}},
+	  .hidden = true,
+	  .genmc = {"poloc_imm_succ", "poloc_imm_pred"}}},
+	{RB::po_loc,
+	 {.name = "po-loc",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {},
+	  .codom = {},
+	  .genmc = {"poloc_succs", "poloc_preds"}}},
+	{RB::rmw,
+	 {.name = "rmw",
+	  .arity = RelArity::OneOne,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::R), Predicate::createBuiltin(PB::EXCL)},
+	  .codom = {Predicate::createBuiltin(PB::W), Predicate::createBuiltin(PB::EXCL)},
+	  .genmc = {"rmw_succ", "rmw_pred"}}},
 	/* deps */
-	{RB::ctrl_imm,
-	 {
-		 .name = "ctrl-imm",
-		 .arity = RelArity::UnsuppMany,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {Predicate::createBuiltin(PB::DEP)},
-		 .codom = {},
-		 .genmc = {"?", "ctrl_preds"},
-	 }},
-	{RB::addr_imm,
-	 {
-		 .name = "addr-imm",
-		 .arity = RelArity::UnsuppMany,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {Predicate::createBuiltin(PB::DEP)},
-		 .codom = {},
-		 .genmc = {"?", "addr_preds"},
-	 }},
-	{RB::data_imm,
-	 {
-		 .name = "data-imm",
-		 .arity = RelArity::UnsuppMany,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {Predicate::createBuiltin(PB::DEP)},
-		 .codom = {},
-		 .genmc = {"?", "data_preds"},
-	 }},
+	{RB::ctrl,
+	 {.name = "ctrl",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {Predicate::createBuiltin(PB::DEP)},
+	  .codom = {},
+	  .genmc = {"?", "ctrl_preds"}}},
+	{RB::addr,
+	 {.name = "addr",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {Predicate::createBuiltin(PB::DEP)},
+	  .codom = {},
+	  .genmc = {"?", "addr_preds"}}},
+	{RB::data,
+	 {.name = "data",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {Predicate::createBuiltin(PB::DEP)},
+	  .codom = {},
+	  .genmc = {"?", "data_preds"}}},
 	/* same thread */
 	{RB::same_thread,
-	 {
-		 .name = "same-thread",
-		 .arity = RelArity::Conj,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {},
-		 .codom = {},
-		 .genmc = {"same_thread", "same_thread"},
-	 }},
+	 {.name = "same-thread",
+	  .arity = RelArity::Conj,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {},
+	  .codom = {},
+	  .genmc = {"same_thread", "same_thread"}}},
 	/* same location */
 	{RB::alloc,
-	 {
-		 .name = "alloc",
-		 .arity = RelArity::ManyOne,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {Predicate::createBuiltin(PB::ALLOC)},
-		 .codom = {},
-		 .genmc = {"alloc_succs", "alloc_pred"},
-	 }},
+	 {.name = "alloc",
+	  .arity = RelArity::OneMany,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {Predicate::createBuiltin(PB::ALLOC)},
+	  .codom = {},
+	  .genmc = {"alloc_succs", "alloc_pred"}}},
 	{RB::frees,
 	 {.name = "free",
 	  .arity = RelArity::OneOne,
@@ -112,133 +125,121 @@ static const std::unordered_map<Relation::BuiltinID, RelationInfo> builtinRelati
 	// FIXME: Loc Domain and Loc codomain (Alloc,free,ret,memaccess) ++ Check basicpredicates
 	// for other useful predicates?
 	{RB::loc_overlap,
-	 {
-		 .name = "loc-overlap",
-		 .arity = RelArity::Final,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {},
-		 .codom = {},
-		 .genmc = {"?", "samelocs"},
-	 }},
+	 {.name = "loc-overlap",
+	  .arity = RelArity::Final,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {},
+	  .codom = {},
+	  .genmc = {"?", "samelocs"}}},
 	/* rf, co, fr, detour */
 	{RB::rf,
-	 {
-		 .name = "rf",
-		 .arity = RelArity::ManyOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::W)},
-		 .codom = {Predicate::createBuiltin(PB::R)},
-		 .genmc = {"rf_succs", "rf_pred"},
-	 }},
+	 {.name = "rf",
+	  .arity = RelArity::OneMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::R)},
+	  .genmc = {"rf_succs", "rf_pred"}}},
 	{RB::rfe,
-	 {
-		 .name = "rfe",
-		 .arity = RelArity::ManyOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::W)},
-		 .codom = {Predicate::createBuiltin(PB::R)},
-		 .genmc = {"rfe_succs", "rfe_pred"},
-	 }},
+	 {.name = "rfe",
+	  .arity = RelArity::OneMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::R)},
+	  .genmc = {"rfe_succs", "rfe_pred"}}},
 	{RB::rfi,
-	 {
-		 .name = "rfi",
-		 .arity = RelArity::ManyOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::W)},
-		 .codom = {Predicate::createBuiltin(PB::R)},
-		 .genmc = {"rfi_succs", "rfi_pred"},
-	 }},
+	 {.name = "rfi",
+	  .arity = RelArity::OneMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::R)},
+	  .genmc = {"rfi_succs", "rfi_pred"}}},
 	{RB::tc,
-	 {
-		 .name = "tc",
-		 .arity = RelArity::OneOne,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {Predicate::createBuiltin(PB::TC)},
-		 .codom = {Predicate::createBuiltin(PB::TB)},
-		 .genmc = {"tc_succ", "tc_pred"},
-	 }},
+	 {.name = "tc",
+	  .arity = RelArity::OneOne,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {Predicate::createBuiltin(PB::TC)},
+	  .codom = {Predicate::createBuiltin(PB::TB)},
+	  .genmc = {"tc_succ", "tc_pred"}}},
 	{RB::tj,
-	 {
-		 .name = "tj",
-		 .arity = RelArity::OneOne,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {Predicate::createBuiltin(PB::TE)},
-		 .codom = {Predicate::createBuiltin(PB::TJ)},
-		 .genmc = {"tj_succ", "tj_pred"},
-	 }},
+	 {.name = "tj",
+	  .arity = RelArity::OneOne,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {Predicate::createBuiltin(PB::TE)},
+	  .codom = {Predicate::createBuiltin(PB::TJ)},
+	  .genmc = {"tj_succ", "tj_pred"}}},
 	{RB::mo_imm,
-	 {
-		 .name = "mo-imm",
-		 .arity = RelArity::OneOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::W)},
-		 .codom = {Predicate::createBuiltin(PB::W)},
-		 .genmc = {"co_imm_succs", "co_imm_pred"},
-	 }},
+	 {.name = "mo-imm",
+	  .arity = RelArity::OneOne,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .hidden = true,
+	  .genmc = {"co_imm_succ", "co_imm_pred"}}},
+	{RB::mo,
+	 {.name = "mo",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .genmc = {"co_succs", "co_preds"}}},
 	{RB::moe,
-	 {
-		 .name = "moe",
-		 .arity = RelArity::UnsuppMany,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::W)},
-		 .codom = {Predicate::createBuiltin(PB::W)},
-		 .genmc = {"?", "?"},
-	 }},
+	 {.name = "moe",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .genmc = {"?", "?"}}},
 	{RB::moi,
-	 {
-		 .name = "moi",
-		 .arity = RelArity::UnsuppMany,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::W)},
-		 .codom = {Predicate::createBuiltin(PB::W)},
-		 .genmc = {"?", "?"},
-	 }},
+	 {.name = "moi",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .genmc = {"?", "?"}}},
 	{RB::fr_imm,
-	 {
-		 .name = "fr-imm",
-		 .arity = RelArity::ManyOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::R)},
-		 .codom = {Predicate::createBuiltin(PB::W)},
-		 .genmc = {"fr_imm_succs", "fr_imm_preds"},
-	 }},
+	 {.name = "fr-imm",
+	  .arity = RelArity::ManyOne,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::R)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .hidden = true,
+	  .genmc = {"fr_imm_succ", "fr_imm_preds"}}},
+	{RB::fr,
+	 {.name = "fr",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::R)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .genmc = {"fr_succs", "fr_preds"}}},
 	{RB::fre,
-	 {
-		 .name = "fre",
-		 .arity = RelArity::ManyOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::R)},
-		 .codom = {Predicate::createBuiltin(PB::W)},
-		 .genmc = {"?", "?"},
-	 }},
+	 {.name = "fre",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::R)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .genmc = {"?", "?"}}},
 	{RB::fri,
-	 {
-		 .name = "fri",
-		 .arity = RelArity::ManyOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::R)},
-		 .codom = {Predicate::createBuiltin(PB::W)},
-		 .genmc = {"?", "?"},
-	 }},
+	 {.name = "fri",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::R)},
+	  .codom = {Predicate::createBuiltin(PB::W)},
+	  .genmc = {"?", "?"}}},
 	{RB::detour,
-	 {
-		 .name = "detour",
-		 .arity = RelArity::OneOne,
-		 .locInfo = RelLocInfo::KeepsLoc,
-		 .dom = {Predicate::createBuiltin(PB::W)},
-		 .codom = {Predicate::createBuiltin(PB::R)},
-		 .genmc = {"detour_succs", "detour_preds"},
-	 }},
+	 {.name = "detour",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::KeepsLoc,
+	  .dom = {Predicate::createBuiltin(PB::W)},
+	  .codom = {Predicate::createBuiltin(PB::R)},
+	  .genmc = {"detour_succs", "detour_preds"}}},
 	/* any */
 	{RB::any,
-	 {
-		 .name = "any",
-		 .arity = RelArity::OneOne,
-		 .locInfo = RelLocInfo::ChangesLoc,
-		 .dom = {},
-		 .codom = {},
-		 .genmc = {"?", "?"},
-	 }},
+	 {.name = "any",
+	  .arity = RelArity::UnsuppMany,
+	  .locInfo = RelLocInfo::ChangesLoc,
+	  .dom = {},
+	  .codom = {},
+	  .genmc = {"other_labels", "other_labels"}}},
 };
 
 static auto builtin_rel_begin() { return builtinRelations.begin(); }
@@ -386,13 +387,18 @@ void registerBuiltins(KatModule &module)
 		theory.registerDisjointPreds(disjSet);
 	}
 
+	auto REFromString = [&](const std::string &s) {
+		return module.getRegisteredRE(s)->clone();
+	};
+	auto registerBuiltinDerived = [&](const std::string &s, std::unique_ptr<RegExp> exp) {
+		module.registerLet(LetStatement::create(s, std::move(exp), NoSavedExp::create(),
+							std::nullopt));
+	};
+
 	/* Derived predicates */
-	module.registerDerived("UR", SeqRE::createOpt(module.getRegisteredID("R"),
-						      module.getRegisteredID("EXCL")));
-	module.registerDerived("UW", SeqRE::createOpt(module.getRegisteredID("W"),
-						      module.getRegisteredID("EXCL")));
-	module.registerDerived(
-		"MEM", AltRE::createOpt(module.getRegisteredID("R"), module.getRegisteredID("W")));
+	registerBuiltinDerived("UR", SeqRE::createOpt(REFromString("R"), REFromString("EXCL")));
+	registerBuiltinDerived("UW", SeqRE::createOpt(REFromString("W"), REFromString("EXCL")));
+	registerBuiltinDerived("MEM", AltRE::createOpt(REFromString("R"), REFromString("W")));
 
 	/* Base relations */
 	for (const auto &ri : builtin_rels()) {
@@ -402,26 +408,35 @@ void registerBuiltins(KatModule &module)
 	/* Per-location pairs */
 	theory.registerPerLocPair(Relation::createBuiltin(Relation::BuiltinID::po_imm),
 				  Relation::createBuiltin(Relation::BuiltinID::po_loc_imm));
+	theory.registerPerLocPair(Relation::createBuiltin(Relation::BuiltinID::po),
+				  Relation::createBuiltin(Relation::BuiltinID::po_loc));
 
-	/* Derived relations */
-	module.registerDerived("po", PlusRE::createOpt(module.getRegisteredID("po-imm")));
-	module.registerDerived("addr", PlusRE::createOpt(module.getRegisteredID("addr-imm")));
-	module.registerDerived("data", PlusRE::createOpt(module.getRegisteredID("data-imm")));
-	module.registerDerived(
-		"ctrl", SeqRE::createOpt(module.getRegisteredID("ctrl-imm"),
-					 StarRE::createOpt(module.getRegisteredID("po-imm"))));
-	module.registerDerived("po-loc", PlusRE::createOpt(module.getRegisteredID("po-loc-imm")));
-	module.registerDerived("mo", PlusRE::createOpt(module.getRegisteredID("mo-imm")));
-	module.registerDerived("fr",
-			       SeqRE::createOpt(module.getRegisteredID("fr-imm"),
-						StarRE::createOpt(module.getRegisteredID("mo"))));
-	module.registerDerived("rmw", SeqRE::createOpt(module.getRegisteredID("UR"),
-						       module.getRegisteredID("po-imm"),
-						       module.getRegisteredID("UW")));
+	/* Derived relations -- currently none by default (po,etc are also built-in) */
 
-	/* Default assumptions*/
-	auto seq = SeqRE::createOpt(module.getRegisteredID("rf"), module.getRegisteredID("fr-imm"));
-	auto cons = SubsetConstraint::createOpt(std::move(seq), module.getRegisteredID("mo-imm"),
-						false);
-	theory.registerAssume(std::move(cons));
+	/* Default assumptions (ORDER MATTERS) */
+	auto frmoIsFR = AssumeStatement::create(
+		SubsetConstraint::createOpt(
+			SeqRE::createOpt(REFromString("fr"), REFromString("mo")),
+			REFromString("fr"), false, false),
+		false);
+	theory.registerAssume(std::move(frmoIsFR));
+
+	auto transPO = AssumeStatement::create(
+		SubsetConstraint::createOpt(
+			SeqRE::createOpt(REFromString("po"), REFromString("po")),
+			REFromString("po"), false, false),
+		false);
+	theory.registerAssume(std::move(transPO));
+	auto transMO = AssumeStatement::create(
+		SubsetConstraint::createOpt(
+			SeqRE::createOpt(REFromString("mo"), REFromString("mo")),
+			REFromString("mo"), false, false),
+		false);
+	theory.registerAssume(std::move(transMO));
+
+	auto seq = SeqRE::createOpt(REFromString("rf"), REFromString("fr"));
+	auto rffrIsMO = AssumeStatement::create(
+		SubsetConstraint::createOpt(std::move(seq), REFromString("mo"), false, false),
+		false);
+	theory.registerAssume(std::move(rffrIsMO));
 }

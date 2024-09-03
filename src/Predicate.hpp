@@ -19,6 +19,7 @@
 #ifndef KATER_PREDICATE_HPP
 #define KATER_PREDICATE_HPP
 
+#include "DbgInfo.hpp"
 #include "VSet.hpp"
 
 #include <algorithm>
@@ -35,6 +36,7 @@ using PredExport = std::string;
 struct PredicateInfo {
 	std::string name;
 	PredExport genmc;
+	std::optional<DbgInfo> dbg;
 };
 
 /**

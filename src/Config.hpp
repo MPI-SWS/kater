@@ -33,6 +33,7 @@ struct Config {
 	bool parallel;
 	std::string name;
 	std::string dir;
+	bool emitVisitArrays;
 	std::string inputFile;
 
 private:

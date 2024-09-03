@@ -4,7 +4,9 @@ set(SOURCES
   Config.cpp
   Constraint.cpp
   Counterexample.cpp
+  DbgInfo.cpp
   Error.cpp
+  GenMCPrinter.cpp
   Kater.cpp
   KatModule.cpp
   NFA.cpp

@@ -24,11 +24,32 @@
 
 #include <fstream>
 #include <iostream>
+#include <string>
 
 class Theory;
+
+auto prettyPrint(std::ostream &str, const TransLabel &lab, const Theory &theory) -> std::ostream &;
 
 auto openFileForWriting(const std::string &filename) -> std::ofstream;
 
 void printNFAToDot(const NFA &nfa, const std::string &filename, const Theory &theory);
+
+constexpr std::string toCamelCase(std::string s) noexcept
+{
+	bool tail = false;
+	std::size_t n = 0;
+	for (unsigned char c : s) {
+		if (c == '-' || c == '_') {
+			tail = false;
+		} else if (tail) {
+			s[n++] = c;
+		} else {
+			tail = true;
+			s[n++] = std::toupper(c);
+		}
+	}
+	s.resize(n);
+	return s;
+}
 
 #endif /* KATER_UTILS_HPP */

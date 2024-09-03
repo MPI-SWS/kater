@@ -76,26 +76,6 @@ void removeDeadStatesDFS(NFA &nfa)
 
 void removeDeadStates(NFA &nfa) { applyBidirectionally(removeDeadStatesDFS, nfa); }
 
-template <typename T> inline void hash_combine(std::size_t &seed, std::size_t v)
-{
-	std::hash<T> hasher;
-	seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
-
-namespace {
-using SPair = std::pair<NFA::State *, NFA::State *>;
-
-struct SPairHasher {
-	auto operator()(SPair p) const -> std::size_t
-	{
-		std::size_t hash = 0;
-		hash_combine<unsigned>(hash, p.first->getId());
-		hash_combine<unsigned>(hash, p.first->getId());
-		return hash;
-	}
-};
-} // namespace
-
 auto isSimilarTo(
 	const NFA & /*nfa*/, const NFA::Transition &t1, const NFA::Transition &t2,
 	const std::unordered_map<NFA::State *, std::unordered_map<NFA::State *, bool>> &similar)
@@ -167,7 +147,7 @@ void removeSimilarTransitionsOneDirection(NFA &nfa)
 	auto simMatrix = findSimilarStates(nfa);
 
 	/* Similar states */
-	std::unordered_set<::SPair, ::SPairHasher> similar;
+	std::unordered_set<StatePair, StatePairHasher> similar;
 	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s1) {
 		std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s2) {
 			if (&*s1 != &*s2 && simMatrix[&*s1][&*s2] && simMatrix[&*s2][&*s1] &&
@@ -451,7 +431,6 @@ void addTransitivePredicateEdges(NFA &nfa, const Theory &theory)
 {
 	std::vector<std::pair<NFA::State *, NFA::Transition>> toRemove;
 	std::vector<NFA::Transition> toCreateStarting;
-	std::unordered_map<NFA::State *, std::vector<NFA::Transition>> toDuplicateAccepting;
 
 	for (auto it = nfa.states_begin(); it != nfa.states_end(); ++it) {
 		auto &s = *it;
@@ -472,10 +451,6 @@ void addTransitivePredicateEdges(NFA &nfa, const Theory &theory)
 					l.merge(outIt2->label);
 					auto trans = NFA::Transition(l, outIt2->dest);
 					toAdd.push_back(trans);
-					if (outIt->dest->isAccepting()) {
-						toDuplicateAccepting[outIt2->dest].push_back(
-							trans.flipTo(&*s));
-					}
 				}
 				if (outIt->dest->isStarting()) {
 					toCreateStarting.push_back(*outIt2);
@@ -491,4 +466,26 @@ void addTransitivePredicateEdges(NFA &nfa, const Theory &theory)
 	}
 	std::for_each(toRemove.begin(), toRemove.end(),
 		      [&](auto &p) { nfa.removeTransition(p.first, p.second); });
+}
+
+void simplify(NFA &nfa, const Theory &theory)
+{
+	KATER_DEBUG(std::cout << "Before simplification: " << nfa;);
+
+	/* Don't bother with empty automata (dead state removal might add no-op states) */
+	if (nfa.getNumStates() == 0)
+		return;
+
+	compactEdges(nfa, theory);
+	removeDeadStates(nfa);
+	removeSimilarTransitions(nfa);
+	removeDeadStates(nfa);
+	scmReduce(nfa);
+	compactEdges(nfa, theory);
+	scmReduce(nfa);
+	removeDeadStates(nfa);
+	removeSimilarTransitions(nfa);
+	removeDeadStates(nfa);
+
+	KATER_DEBUG(std::cout << "After simplification: " << nfa;);
 }

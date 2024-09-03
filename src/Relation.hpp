@@ -19,8 +19,10 @@
 #ifndef KATER_RELATION_HPP
 #define KATER_RELATION_HPP
 
+#include "DbgInfo.hpp"
 #include "Predicate.hpp"
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -28,7 +30,7 @@
  **                           RelationInfo Class
  ******************************************************************************/
 
-enum class RelArity { Unknown, OneOne, ManyOne, UnsuppMany, Conj, Final };
+enum class RelArity { Unknown, OneOne, ManyOne, OneMany, UnsuppMany, Conj, Final };
 enum class RelLocInfo { Unknown, ChangesLoc, KeepsLoc };
 struct RelExport {
 	std::string succ;
@@ -36,12 +38,14 @@ struct RelExport {
 };
 
 struct RelationInfo {
-	std::string name;
-	RelArity arity;
-	RelLocInfo locInfo;
-	PredicateSet dom;
-	PredicateSet codom;
-	RelExport genmc;
+	std::string name{};
+	RelArity arity{};
+	RelLocInfo locInfo{};
+	PredicateSet dom{};
+	PredicateSet codom{};
+	bool hidden{};
+	RelExport genmc{};
+	std::optional<DbgInfo> dbg{};
 };
 
 /*******************************************************************************
@@ -67,32 +71,37 @@ public:
 		/* tc, tj */
 		tc,
 		tj,
-		/* rf, co, fr */
+		/* rf, co, fr, rmw */
 		PerLocBegin,
 		rf,
 		mo_imm,
+		mo,
 		fr_imm,
+		fr,
 		/* rfe, coe, fre */
 		rfe,
 		moe,
 		fre,
 		/* deps */
 		WithinPoBegin,
-		ctrl_imm,
-		addr_imm,
-		data_imm,
+		ctrl,
+		addr,
+		data,
 		/* rfi, coi, fri*/
 		rfi,
 		moi,
 		fri,
 		/* detour */
 		detour,
-		/* po-loc */
+		/* rmw, po-loc */
+		rmw,
 		po_loc_imm,
-		WithinPoLast,
+		po_loc,
 		PerLocLast,
-		/* po */
 		po_imm,
+		WithinPoLast,
+		/* po */
+		po,
 		/* any */
 		any,
 	};
@@ -126,6 +135,7 @@ public:
 	[[nodiscard]] auto getName() const -> std::string;
 
 	auto operator<=>(const Relation &) const = default;
+	friend auto operator<<(std::ostream &ostr, const Relation &r) -> std::ostream &;
 
 private:
 	Relation(ID id) : id(id) {}

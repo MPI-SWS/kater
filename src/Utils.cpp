@@ -23,6 +23,44 @@
 
 #include <sstream>
 
+using namespace std::literals;
+
+auto prettyPrint(std::ostream &s, const TransLabel &label, const Theory &theory) -> std::ostream &
+{
+	std::string rel;
+	if (label.isRelation()) {
+		if (theory.hasInfo(*label.getRelation())) {
+			rel = theory.getName(*label.getRelation());
+		} else {
+			rel = std::to_string(label.getRelation()->getID());
+		}
+		if (label.getRelation()->isInverse())
+			rel += "^-1";
+	}
+	std::string pre = "[";
+	for (const auto &p : label.getPreChecks().preds()) {
+		pre += theory.getName(p) + (p.isComplement() ? "^-1"s : ""s) + ";"s;
+	}
+	pre += "\b]";
+
+	std::string post = "[";
+	for (const auto &p : label.getPostChecks().preds()) {
+		post += theory.getName(p) + (p.isComplement() ? "^-1"s : ""s) + ";"s;
+	}
+	post += "\b]";
+
+	auto hasPre = false;
+	if (pre != "[\b]") {
+		s << pre;
+		hasPre = true;
+	}
+	if (!rel.empty())
+		s << (hasPre ? "; "s : ""s) << rel;
+	if (post != "[\b]")
+		s << "; " << post;
+	return s;
+}
+
 auto openFileForWriting(const std::string &filename) -> std::ofstream
 {
 	std::ofstream fout;

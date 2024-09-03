@@ -19,7 +19,6 @@
 #ifndef KATER_KATER_HPP
 #define KATER_KATER_HPP
 
-#include "CNFAs.hpp"
 #include "Config.hpp"
 #include "KatModule.hpp"
 
@@ -43,7 +42,7 @@ public:
 	 * Returns whether any assertion was violated */
 	auto checkAssertions() -> bool;
 
-	auto exportCode(std::string &dirPrefix, std::string &outPrefix) -> bool;
+	auto exportCode() -> bool;
 
 private:
 	struct InclusionResult {
@@ -52,21 +51,19 @@ private:
 	};
 
 	[[nodiscard]] auto getConf() const -> const Config & { return config; }
-	auto getCNFAs() -> CNFAs & { return cnfas; }
 
+	auto isPPOIntersectionInPPO(const AcyclicConstraint *acyc) const -> InclusionResult;
 	auto isDFASubLanguageOfNFA(NFA &nfa, const NFA &other) const -> InclusionResult;
-	[[nodiscard]] auto checkInclusion(const SubsetConstraint &subsetC) const -> InclusionResult;
-	auto checkAssertion(Constraint *c) -> InclusionResult;
+	[[nodiscard]] auto checkInclusion(SubsetConstraint &subsetC) const -> InclusionResult;
+	auto checkAssertion(Constraint &cst) -> InclusionResult;
 
-	void generateNFAs();
+	void optimizeModuleForExport();
 	auto checkExportRequirements() -> bool;
 
 	void printCounterexample(const Counterexample &cex) const;
 
 	const Config &config;
 	std::unique_ptr<KatModule> module;
-
-	CNFAs cnfas;
 };
 
 #endif /* KATER_KATER_HPP */

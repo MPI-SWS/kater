@@ -18,17 +18,21 @@
 
 #include "Kater.hpp"
 
+#include "AdjList.hpp"
 #include "Config.hpp"
+#include "GenMCPrinter.hpp"
 #include "NFAUtils.hpp"
-#include "Printer.hpp"
+#include "RegExpUtils.hpp"
 #include "Saturation.hpp"
 #include "Utils.hpp"
 #include "Visitor.hpp"
 
+#include <algorithm>
 #include <deque>
 #include <execution>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <utility>
 
 #define DEBUG_TYPE "kater"
@@ -50,76 +54,32 @@ struct CompSchemeRHS {
 	std::optional<PredicateSet> post;
 };
 
-template <typename T> inline void hash_combine(std::size_t &seed, std::size_t v)
-{
-	std::hash<T> hasher;
-	seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
-
 /*************************************************************
  *              Regexp utilities
  ************************************************************/
 
-void expandSavedVars(URE &r, const KatModule &module)
+void expandRfs(SubsetConstraint &subsetC, const KatModule &module)
 {
-	for (int i = 0; i < r->getNumKids(); i++) {
-		expandSavedVars(r->getKid(i), module);
-	}
-	if (auto *re = dynamic_cast<CharRE *>(&*r)) {
-		if (re->getLabel().isBuiltin() || !module.isSavedID(re)) {
-			return;
-		}
-		r = module.getSavedID(re);
-		expandSavedVars(r, module);
-	}
-}
-
-void expandRfs(URE &r, const KatModule &module)
-{
-	for (int i = 0; i < r->getNumKids(); i++) {
-		expandRfs(r->getKid(i), module);
-	}
-
-	auto rf = module.getRegisteredID("rf");
-	const auto *re = dynamic_cast<const CharRE *>(&*r);
-	if ((re == nullptr) ||
-	    re->getLabel().getRelation() !=
-		    dynamic_cast<const CharRE *>(&*rf)->getLabel().getRelation()) {
+	/* We will expand rf on the LHS, but only if the RHS uses rfe/rfi */
+	auto rhsHasRfiRfe = false;
+	visitRE(subsetC.getRHSRef(), [&](auto &re) {
+		auto *charRE = dynamic_cast<const CharRE *>(&*re);
+		if (charRE && charRE->getLabel().getRelation().has_value() &&
+		    (charRE->getLabel().getRelation()->getID() ==
+			     Relation::createBuiltin(Relation::BuiltinID::rfe).getID() ||
+		     charRE->getLabel().getRelation()->getID() ==
+			     Relation::createBuiltin(Relation::BuiltinID::rfi).getID()))
+			rhsHasRfiRfe = true;
+	});
+	if (!rhsHasRfiRfe)
 		return;
-	}
 
-	auto rfe = module.getRegisteredID("rfe");
-	auto rfi = module.getRegisteredID("rfi");
+	auto rf = module.getRegisteredRE("rf");
 
-	auto re1 = re->clone();
-	auto re2 = re->clone();
-	auto l1 = TransLabel(dynamic_cast<CharRE *>(&*rfe)->getLabel().getRelation(),
-			     re->getLabel().getPreChecks(), re->getLabel().getPostChecks());
-	auto l2 = TransLabel(dynamic_cast<CharRE *>(&*rfi)->getLabel().getRelation(),
-			     re->getLabel().getPreChecks(), re->getLabel().getPostChecks());
-	dynamic_cast<CharRE *>(&*re1)->setLabel(l1);
-	dynamic_cast<CharRE *>(&*re2)->setLabel(l2);
-
-	r = AltRE::createOpt(std::move(re1), std::move(re2));
-}
-
-void transitivizeSaved(URE &r, const KatModule &module)
-{
-	for (int i = 0; i < r->getNumKids(); i++) {
-		transitivizeSaved(r->getKid(i), module);
-	}
-	if (auto *re = dynamic_cast<CharRE *>(&*r)) {
-		if (re->getLabel().isBuiltin()) {
-			return;
-		}
-		auto sIt = std::find_if(module.svar_begin(), module.svar_end(), [&](auto &p) {
-			return p.first == *re->getLabel().getRelation();
-		});
-		if (sIt == module.svar_end() || sIt->second.status == VarStatus::Normal) {
-			return;
-		}
-		r = PlusRE::createOpt(re->clone());
-	}
+	auto rfe = module.getRegisteredRE("rfe")->clone();
+	auto rfi = module.getRegisteredRE("rfi")->clone();
+	auto alt = AltRE::createOpt(std::move(rfe), std::move(rfi));
+	replaceREWith(subsetC.getLHSRef(), rf, &*alt);
 }
 
 std::pair<PredicateSet, unsigned> collectPredicateKids(const RegExp *re, unsigned startIdx)
@@ -184,28 +144,6 @@ void removeConsecutivePredicates(NFA &nfa, const Theory &theory)
 	}
 }
 
-void simplify(NFA &nfa, const Theory &theory)
-{
-	KATER_DEBUG(std::cout << "Before simplification: " << nfa;);
-
-	/* Don't bother with empty automata (dead state removal might add no-op states) */
-	if (nfa.getNumStates() == 0)
-		return;
-
-	compactEdges(nfa, theory);
-	removeDeadStates(nfa);
-	removeSimilarTransitions(nfa);
-	removeDeadStates(nfa);
-	scmReduce(nfa);
-	compactEdges(nfa, theory);
-	scmReduce(nfa);
-	removeDeadStates(nfa);
-	removeSimilarTransitions(nfa);
-	removeDeadStates(nfa);
-
-	KATER_DEBUG(std::cout << "After simplification: " << nfa;);
-}
-
 void normalize(NFA &nfa, const Theory &theory)
 {
 	simplify(nfa, theory);
@@ -215,7 +153,7 @@ void normalize(NFA &nfa, const Theory &theory)
 	removeDeadStates(nfa);
 }
 
-void reduce(NFA &nfa, ReductionType /*t*/, const Theory &theory)
+void reduce(NFA &nfa, const Theory &theory)
 {
 	simplify(nfa, theory);
 	std::for_each(nfa.accept_begin(), nfa.accept_end(), [&](auto &s) {
@@ -331,10 +269,11 @@ std::pair<bool, CompSchemeRHS> extractCompRHSInfo(const RegExp *rRE, const RegEx
 	return {true, result};
 }
 
-std::pair<bool, CompSchemeRHS> isSupportedCompScheme(const SubsetConstraint *assm, URE poRE)
+std::pair<bool, CompSchemeRHS> isSupportedCompScheme(const SubsetConstraint *assm,
+						     const RegExp *poRE)
 {
-	auto [lok, lhs] = extractCompLHSInfo(assm->getLHS(), &*poRE);
-	auto [rok, rhs] = extractCompRHSInfo(assm->getRHS(), &*poRE);
+	auto [lok, lhs] = extractCompLHSInfo(assm->getLHS(), poRE);
+	auto [rok, rhs] = extractCompRHSInfo(assm->getRHS(), poRE);
 
 	if (!lok || !rok)
 		return {false, rhs};
@@ -358,17 +297,16 @@ NFA createCompilationNFA(const CompSchemeRHS &rhs, const Theory &theory)
 	}
 	assert(!disj.empty());
 	auto fenceExp = disj.size() == 1 ? std::move(disj[0]) : AltRE::create(std::move(disj));
-	auto po_imm =
-		CharRE::create(TransLabel(Relation::createBuiltin(Relation::BuiltinID::po_imm)));
+	auto po = CharRE::create(TransLabel(Relation::createBuiltin(Relation::BuiltinID::po)));
 	PredicateSet pre = rhs.pre.has_value() ? *rhs.pre : PredicateSet{};
 	PredicateSet post = rhs.post.has_value() ? *rhs.post : PredicateSet{};
 
 	auto reC = SeqRE::createOpt(
 		CharRE::create(TransLabel(std::nullopt, pre)),
-		StarRE::createOpt(SeqRE::createOpt(po_imm->clone(), std::move(fenceExp))),
-		po_imm->clone(), CharRE::create(TransLabel(std::nullopt, post)));
+		StarRE::createOpt(SeqRE::createOpt(po->clone(), std::move(fenceExp))), po->clone(),
+		CharRE::create(TransLabel(std::nullopt, post)));
 
-	auto lNFA = reC->toNFA(theory);
+	auto lNFA = reC->toNFA();
 	normalize(lNFA, theory);
 	return lNFA;
 }
@@ -379,7 +317,7 @@ void expandSubsetAssumption(NFA &rhs, const SubsetConstraint *assm, const KatMod
 	auto *lRE = assm->getLHS();
 	auto *rRE = assm->getRHS();
 
-	auto lNFA = lRE->toNFA(theory);
+	auto lNFA = lRE->toNFA();
 	normalize(lNFA, theory);
 
 	/* Handle `A <= 0` assumption */
@@ -395,37 +333,36 @@ void expandSubsetAssumption(NFA &rhs, const SubsetConstraint *assm, const KatMod
 	}
 
 	/* Transform `A ; A <= A` to `transitive A` */
-	if (auto *seqRE = dynamic_cast<const SeqRE *>(lRE)) {
-		if (*rRE == *seqRE->getKid(0) && *rRE == *seqRE->getKid(1)) {
-			saturateTransitive(
-				rhs, *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation());
-			return;
-		}
+	auto *seqRE = dynamic_cast<const SeqRE *>(lRE);
+	if (seqRE && *rRE == *seqRE->getKid(0) && *rRE == *seqRE->getKid(1) &&
+	    dynamic_cast<const CharRE *>(rRE)) {
+		auto rel = *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation();
+		saturateTransitive(rhs, rel);
+		return;
 	}
 	/* Transform `A+ <= A` to `transitive A` */
-	if (auto *plusRE = dynamic_cast<const PlusRE *>(&*lRE)) {
-		if (*rRE == *plusRE->getKid(0)) {
-			saturateTransitive(
-				rhs, *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation());
-			return;
-		}
+	auto *plusRE = dynamic_cast<const PlusRE *>(&*lRE);
+	if (plusRE && *rRE == *plusRE->getKid(0) && dynamic_cast<const CharRE *>(rRE)) {
+		auto rel = *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation();
+		saturateTransitive(rhs, rel);
+		return;
 	}
+
 	// FIXME: Also discard A <= A{*,+}
 	/* Discard `A <= A?` assumption */
-	if (auto *charRE = dynamic_cast<const CharRE *>(&*lRE)) {
-		if (auto *qmarkRE = dynamic_cast<const QMarkRE *>(&*rRE)) {
-			if (*qmarkRE->getKid(0) == *charRE)
-				return;
-		}
+	auto *charRE = dynamic_cast<const CharRE *>(&*lRE);
+	if (charRE && dynamic_cast<const QMarkRE *>(&*rRE) && *rRE->getKid(0) == *charRE) {
+		return;
 	}
 	/* Handle `A <= builtin` assumption */
-	if (auto *charRE = dynamic_cast<const CharRE *>(&*rRE)) {
+	auto *charRHS = dynamic_cast<const CharRE *>(&*rRE);
+	if (charRHS) {
 		saturateBuiltin(rhs, *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation(),
 				std::move(lNFA), theory);
 		return;
 	}
 	/* Handle `[A];po;[B] <= [A];po;[C];po;[B]` assumption */
-	auto [supported, compRHS] = isSupportedCompScheme(assm, module.getRegisteredID("po"));
+	auto [supported, compRHS] = isSupportedCompScheme(assm, module.getRegisteredRE("po"));
 	if (supported) {
 		saturateEmpty(rhs, createCompilationNFA(compRHS, theory));
 		return;
@@ -435,23 +372,23 @@ void expandSubsetAssumption(NFA &rhs, const SubsetConstraint *assm, const KatMod
 	return;
 }
 
-void expandAssumption(NFA &rhs, const Constraint *assm, const KatModule &module)
+void expandAssumption(NFA &rhs, const AssumeStatement *assm, const KatModule &module)
 {
 	assert(assm);
 
-	if (const auto *cc = dynamic_cast<const EqualityConstraint *>(assm)) {
+	auto *cst = assm->getConstraint();
+	if (const auto *cc = dynamic_cast<const EqualityConstraint *>(cst)) {
 		expandSubsetAssumption(rhs, cc, module);
 		expandSubsetAssumption(rhs, cc, module);
 		return;
 	}
-	if (const auto *tc = dynamic_cast<const TotalityConstraint *>(assm)) {
-		saturateTotal(
-			rhs,
-			*dynamic_cast<const CharRE *>(tc->getRelation())->getLabel().getRelation());
+	if (const auto *tc = dynamic_cast<const TotalityConstraint *>(cst)) {
+		saturateTotal(rhs,
+			      *dynamic_cast<const CharRE *>(tc->getRE())->getLabel().getRelation());
 		return;
 	}
 	// FIXME: What about SubsetSameEnds???
-	if (const auto *ec = dynamic_cast<const SubsetConstraint *>(assm)) {
+	if (const auto *ec = dynamic_cast<const SubsetConstraint *>(cst)) {
 		expandSubsetAssumption(rhs, ec, module);
 		return;
 	}
@@ -686,21 +623,24 @@ auto Kater::isDFASubLanguageOfNFA(NFA &nfa, const NFA &other) const -> Inclusion
 	return {true, {}};
 }
 
-auto Kater::checkInclusion(const SubsetConstraint &subsetC) const -> InclusionResult
+auto Kater::checkInclusion(SubsetConstraint &subsetC) const -> InclusionResult
 {
 	auto &module = getModule();
 	auto &theory = module.getTheory();
 
-	auto nfa1 = subsetC.getLHS()->toNFA(theory);
+	expandRfs(subsetC, module);
+
+	auto nfa1 = subsetC.getLHS()->toNFA();
 	normalize(nfa1, theory);
 	removeSimilarTransitions(nfa1);
 	if (subsetC.sameEnds()) {
 		saturateInitFinalPreds(nfa1, theory);
 		saturateLoc(nfa1, theory);
 	}
+	removeSimilarTransitions(nfa1);
 	auto lhs = nfa1.to_DFA().first;
 
-	auto nfa2 = subsetC.getRHS()->toNFA(theory);
+	auto nfa2 = subsetC.getRHS()->toNFA();
 	normalize(nfa2, theory);
 	for (const auto &assm : theory.assumes()) {
 		expandAssumption(nfa2, &*assm, module);
@@ -709,33 +649,40 @@ auto Kater::checkInclusion(const SubsetConstraint &subsetC) const -> InclusionRe
 	pruneNFA(nfa2, lhs, theory);
 	removeDeadStates(nfa2);
 	normalize(nfa2, theory);
+	if (subsetC.rotated()) {
+		saturateRotate(nfa2, theory);
+		normalize(nfa2, theory);
+	}
+	/* doing another similarity pass here would
+	 * further minimize the NFA, but minimizing
+	 * doesn't seem to help. The remaining time
+	 * is determined by the LHS anyway, and these
+	 * passes are costly */
 	return isDFASubLanguageOfNFA(lhs, nfa2);
 }
 
-auto Kater::checkAssertion(Constraint *c) -> InclusionResult
+auto Kater::checkAssertion(Constraint &cst) -> InclusionResult
 {
 	if (getConf().verbose >= 2) {
-		std::cout << "Checking assertion " << *c << std::endl;
-	}
-
-	for (int i = 0; i < c->getNumKids(); i++) {
-		expandSavedVars(c->getKid(i), getModule());
-		expandRfs(c->getKid(i), getModule());
+		std::cout << "Checking assertion " << cst << std::endl;
 	}
 
 	InclusionResult result;
 	auto visitor = make_visitor(
 		type_list<SubsetConstraint, EqualityConstraint>{},
-		[&](const SubsetConstraint &sc) { result = checkInclusion(sc); },
+		[&](const SubsetConstraint &sc) {
+			result = checkInclusion(const_cast<SubsetConstraint &>(sc));
+		},
 		[&](const EqualityConstraint &ec) {
-			result = checkInclusion(ec);
+			result = checkInclusion(const_cast<EqualityConstraint &>(ec));
 			if (result.result) {
-				auto invC = SubsetConstraint::create(
-					ec.getLHS()->clone(), ec.getRHS()->clone(), ec.sameEnds());
+				auto invC = SubsetConstraint::create(ec.getRHS()->clone(),
+								     ec.getLHS()->clone(),
+								     ec.sameEnds(), ec.rotated());
 				result = checkInclusion(*invC);
 			}
 		});
-	visitor(*c);
+	visitor(cst);
 	return result;
 }
 
@@ -749,24 +696,31 @@ auto Kater::checkAssertions() -> bool
 	 */
 	getModule().getTheory().simplify();
 
-	/* Helper function to statespatch checkers as the different policies do not share a type...
-	 */
+	/* Helper function to dispatch checkers as the different policies do not share a type */
 	auto maybe_parallelize = [&]<typename F>(F f) {
+#ifdef __cpp_lib_execution
 		return getConf().parallel ? f(std::execution::par_unseq) : f(std::execution::seq);
+#else
+		return f(false); // ifdef types don't match but this is OK (false remains unused)
+#endif
 	};
 
 	/* Go ahead and check */
-	std::vector<std::pair<KatModule::DbgInfo, Counterexample>> errors;
+	std::vector<std::pair<DbgInfo, Counterexample>> errors;
 	auto status = true;
-	maybe_parallelize([&](auto &policy) {
-		std::for_each(policy, module->assert_begin(), module->assert_end(),
-			      [&](const auto &assert) {
-				      auto [ok, cex] = checkAssertion(&*assert.co);
-				      if (!ok) {
-					      status = false;
-					      errors.push_back({assert.loc, cex});
-				      }
-			      });
+	maybe_parallelize([&](auto policy) {
+		auto asserts = module->asserts();
+		std::for_each(
+#ifdef __cpp_lib_execution
+			policy,
+#endif
+			asserts.begin(), asserts.end(), [&](auto &assert) {
+				auto [ok, cex] = checkAssertion(*assert->getConstraint());
+				if (!ok) {
+					status = false;
+					errors.push_back({assert->getDbgInfo(), cex});
+				}
+			});
 	});
 
 	/* Print all counterexamples */
@@ -778,47 +732,214 @@ auto Kater::checkAssertions() -> bool
 }
 
 /*************************************************************
- *              DInclusion checking
+ *              Code export
  ************************************************************/
+
+/*
+ * Checks whether each kid of some MutRecRE is using productive recursive calls.
+ * E.g., :
+ *  - let rec x = x        => not productive
+ *  - let rec x = x? ; po  => productive
+ *  - let rec x = y | po
+ *        and y = [REL]    => productive (x non productive, y productive)
+ *
+ * Returns a vector of pairs denoting whether each kid is productive, and its starting rec symbols
+ */
+auto collectProductiveRecursions(const MutRecRE *re) -> std::vector<std::pair<bool, VSet<Relation>>>
+{
+	/* Helper lambda to recurse to all kids */
+	auto checkProdRec = [&](const RegExp *re, const VSet<Relation> &recs,
+				auto &funRef) -> std::pair<bool, VSet<Relation>> {
+		if (auto *charRE = dynamic_cast<const CharRE *>(re)) {
+			/* [] are non-productive */
+			if (charRE->isPredicate())
+				return {false, {}};
+			/* r in recs is also non productive, because it can only appear at the
+			 * leftmost place of composition */
+			if (recs.contains(*charRE->getLabel().getRelation()))
+				return {false, {*charRE->getLabel().getRelation()}};
+			/* all other relations are productive */
+			return {true, {}};
+		}
+		/* r?, r* are non-productive */
+		auto *qmarkRE = dynamic_cast<const QMarkRE *>(re);
+		auto *starRE = dynamic_cast<const StarRE *>(re);
+		if (qmarkRE || starRE) {
+			return {false, funRef(re->getKid(0), recs, funRef).second};
+		}
+		/* r=r1;...;rn is productive if tail(r) is productive */
+		if (auto *seqRE = dynamic_cast<const SeqRE *>(re)) {
+			assert(seqRE->getNumKids() > 1);
+			auto tailProductive =
+				std::any_of(seqRE->kid_begin() + 1, seqRE->kid_end(), [&](auto &k) {
+					return funRef(&*k, recs, funRef).first;
+				});
+			return {tailProductive, funRef(seqRE->getKid(0), recs, funRef).second};
+		}
+
+		/* In all other cases, just accumulate kid results */
+		return std::accumulate(
+			re->kid_begin(), re->kid_end(), std::pair<bool, VSet<Relation>>(true, {}),
+			[&](auto acc, auto &elem) {
+				auto result = funRef(&*elem, recs, funRef);
+				if (!result.first)
+					acc.second.insert(result.second);
+				return std::make_pair(acc.first && result.first, acc.second);
+			});
+	};
+
+	auto recs = re->recs();
+	VSet<Relation> rels(std::ranges::begin(recs), std::ranges::end(recs));
+	return std::accumulate(re->kid_begin(), re->kid_end(),
+			       std::vector<std::pair<bool, VSet<Relation>>>(),
+			       [&](auto acc, auto &elem) {
+				       acc.push_back(checkProdRec(&*elem, rels, checkProdRec));
+				       return std::move(acc);
+			       });
+}
+
+/*
+ * Returns a "call-graph" of productive calls:
+ *  whenever a recursive relation X non-productively calls Y (see checkProductiveRecusion),
+ *  the graph contains an edge Y->X
+ */
+auto constructRecCallGraph(const MutRecRE *re) -> AdjList<Relation, RelationHasher>
+{
+	auto recs = re->recs();
+	std::vector<Relation> rels(std::ranges::begin(recs), std::ranges::end(recs));
+	AdjList<Relation, RelationHasher> graph(rels);
+	auto i = 0U;
+	for (auto &[prod, starting] : collectProductiveRecursions(re)) {
+		if (!prod) {
+			for (auto &rel : starting)
+				graph.addEdge(rel, re->getRec(i));
+		}
+		i++;
+	}
+	return graph;
+}
+
+auto containsMandatoryRegistrations(const KatModule &module) -> bool
+{
+	auto ppo = module.getPPODeclaration();
+	if (!ppo) {
+		std::cerr << "[Error] No top-level ppo definition provided\n";
+		return false;
+	}
+	auto hb = module.getHBDeclaration();
+	if (!hb) {
+		std::cerr << "[Error] No top-level hb_stable definition provided\n";
+		return false;
+	}
+	if (!dynamic_cast<const ViewExp *>(hb->getSaved())) {
+		std::cerr << "[Error] hb_stable needs to be stored in a view\n";
+		return false;
+	}
+	auto coh = module.getCOHDeclaration();
+	if (!coh) {
+		std::cerr << "[Error] No coherence constraint provided\n";
+		return false;
+	}
+	if (!dynamic_cast<const ViewExp *>(coh->getSaved())) {
+		std::cerr << "[Error] Coherence constraint needs to take a view argument\n";
+		return false;
+	}
+	return true;
+}
+
+auto Kater::isPPOIntersectionInPPO(const AcyclicConstraint *acyc) const -> InclusionResult
+{
+	auto &theory = getModule().getTheory();
+	auto nfa = acyc->getRE()->toNFA();
+
+	auto poNFA = getModule().getRegisteredRE("po")->toNFA();
+	normalize(poNFA, theory);
+	removeSimilarTransitions(poNFA);
+	auto polocNFA = getModule().getRegisteredRE("po-loc")->toNFA();
+	normalize(polocNFA, theory);
+	removeSimilarTransitions(polocNFA);
+
+	nfa.star();
+	normalize(nfa, theory);
+	removeSimilarTransitions(nfa);
+
+	nfa.clearAllStarting();
+	nfa.clearAllAccepting();
+	VSet<NFA::State *> toSplit;
+	for (auto &sUP : nfa.states()) {
+		for (auto &t : sUP->ins()) {
+			if (t.label.isRelation() && theory.isEco(t.label)) {
+				toSplit.insert(&*sUP);
+			}
+		}
+	}
+	for (auto *s : toSplit) {
+		auto *d = nfa.splitState(s, [&](auto &t) { return theory.isEco(t.label); });
+		for (auto &t : s->ins())
+			nfa.makeAccepting(t.dest);
+	}
+	for (auto &sUP :
+	     nfa.states() | std::views::filter([&](auto &sUP) {
+		     return sUP->hasAllOutPredicates() && // !sUP->isAccepting() &&
+			    std::none_of(sUP->out_begin(), sUP->out_end(),
+					 [&](auto &t) { return t.dest->isAccepting(); });
+	     })) {
+		nfa.makeStarting(&*sUP);
+	}
+	for (auto &sUP : nfa.states())
+		nfa.removeTransitionsIf(&*sUP, [&](auto &t) {
+			return t.label.isRelation() && theory.isEco(t.label);
+		});
+
+	normalize(nfa, theory);
+	removeSimilarTransitions(nfa);
+
+	auto lhs = nfa.to_DFA().first;
+
+	auto nfa2 = AltRE::createOpt(
+			    SeqRE::createOpt(
+				    StarRE::createOpt(CharRE::create(TransLabel(
+					    Relation::createBuiltin(Relation::BuiltinID::any)))),
+				    getModule().createPPORF(),
+				    StarRE::createOpt(CharRE::create(TransLabel(
+					    Relation::createBuiltin(Relation::BuiltinID::any))))),
+			    RegExp::createId())
+			    ->toNFA();
+	normalize(nfa2, theory);
+	for (const auto &assm : theory.assumes()) {
+		expandAssumption(nfa2, &*assm, getModule());
+		normalize(nfa2, theory);
+	}
+	pruneNFA(nfa2, lhs, theory);
+	removeDeadStates(nfa2);
+	normalize(nfa2, theory);
+	return isDFASubLanguageOfNFA(lhs, nfa2);
+}
 
 auto Kater::checkExportRequirements() -> bool
 {
 	auto &module = getModule();
 
-	/* Ensure that pporf is implied by the acyclicity constraints */
-	auto ppo = module.getPPO();
-	if (!ppo) {
-		std::cerr << "[Error] No top-level ppo definition provided\n";
+	if (!containsMandatoryRegistrations(module))
 		return false;
-	}
-	auto hb = module.getHB();
-	if (!hb) {
-		std::cerr << "[Error] No top-level hb_stable definition provided\n";
-		return false;
-	}
-	auto *hbRE = dynamic_cast<CharRE *>(&*hb);
-	if ((hbRE == nullptr) || !hbRE->getLabel().getRelation()) {
-		std::cerr << "[Error] hb_stable needs to be stored in a view\n";
-		return false;
-	}
-	auto hbIt = std::find_if(module.svar_begin(), module.svar_end(), [&](auto &kv) {
-		return kv.first == *hbRE->getLabel().getRelation() &&
-		       kv.second.status == VarStatus::View;
-	});
-	if (hbIt == module.svar_end()) {
-		std::cerr << "[Error] hb_stable needs to be stored in a view\n";
-		return false;
-	}
 
-	auto pporf = module.getPPORF();
-	auto acycDisj = std::accumulate(module.acyc_begin(), module.acyc_end(),
-					RegExp::createFalse(), [&](auto re1, auto &co2) {
+	/* Ensure that pporf is implied by the acyclicity constraints */
+	auto pporf = module.createPPORF();
+	auto acycsView =
+		module.exports() | std::views::filter([&](auto &stmt) {
+			return dynamic_cast<const AcyclicConstraint *>(stmt->getConstraint());
+		}) |
+		std::views::transform([&](auto &stmt) {
+			return dynamic_cast<const AcyclicConstraint *>(stmt->getConstraint());
+		});
+	auto acycDisj = std::accumulate(acycsView.begin(), acycsView.end(), RegExp::createFalse(),
+					[&](auto re1, auto *acyc) {
 						return AltRE::createOpt(re1->clone(),
-									co2->getKid(0)->clone());
+									acyc->getRE()->clone());
 					});
-	auto noOOTA = SubsetConstraint::create(pporf->clone(),
-					       StarRE::createOpt(std::move(acycDisj)), false);
-	auto [status, cex] = checkAssertion(&*noOOTA);
+	auto noOOTA = SubsetConstraint::create(
+		pporf->clone(), StarRE::createOpt(std::move(acycDisj)), false, false);
+	auto [status, cex] = checkAssertion(*noOOTA);
 	if (!status) {
 		std::cerr << "[Warning] Acyclicity constraints do not preclude OOTA.\n";
 		std::cerr << "OOTA needs to be enforced by the model checker\n";
@@ -826,37 +947,48 @@ auto Kater::checkExportRequirements() -> bool
 		status = true; /* treat as a soft error */
 	}
 
+	/* Check extensibility */
+	for (auto *ac : acycsView) {
+		if (auto [ok, cex] = isPPOIntersectionInPPO(ac); !ok) {
+			std::cerr << "[Error] acyclic constraint /\\ ar is not included in ppo: "
+				  << *ac << "\n";
+			printCounterexample(cex);
+			status = false;
+		}
+	}
+
 	/* Check correctness of "unless" clauses in acyclicity constraints */
-	for (auto &acyc : module.acycs()) {
-		auto *ac = dynamic_cast<AcyclicConstraint *>(&*acyc);
-		if (!ac->getConstraint())
+	for (auto &stmt : module.exports()) {
+		auto *currentCst = dynamic_cast<const AcyclicConstraint *>(stmt->getConstraint());
+		if (!currentCst || !stmt->getUnless())
 			continue;
 
 		/* A: all acyclicity constraints */
-		auto acycDisj = std::accumulate(
-			module.acyc_begin(), module.acyc_end(), RegExp::createFalse(),
-			[&](auto re1, auto &co2) {
-				return AltRE::createOpt(re1->clone(), co2->getKid(0)->clone());
-			});
+		auto acycDisj = std::accumulate(acycsView.begin(), acycsView.end(),
+						RegExp::createFalse(), [&](auto re1, auto *ac) {
+							return AltRE::createOpt(
+								re1->clone(), ac->getRE()->clone());
+						});
 		/* A_R: acyclicity constraints w/o the current one */
 		auto acycDisjRest = std::accumulate(
-			module.acyc_begin(), module.acyc_end(), RegExp::createFalse(),
-			[&](auto re1, auto &co2) {
-				return *co2->getKid(0) == *acyc->getKid(0)
+			acycsView.begin(), acycsView.end(), RegExp::createFalse(),
+			[&](auto re1, auto *ac) {
+				return *ac->getRE() == *currentCst->getRE()
 					       ? std::move(re1)
 					       : AltRE::createOpt(re1->clone(),
-								  co2->getKid(0)->clone());
+								  ac->getRE()->clone());
 			});
 
 		/* it must be: A_R => A (assuming the unless holds) */
-		module.getTheory().registerTempAssume(ac->getConstraint()->clone());
+		module.getTheory().registerAssume(
+			AssumeStatement::create(stmt->getUnless()->clone(), true));
 		auto unlessOK = SubsetConstraint::create(std::move(acycDisj),
-							 std::move(acycDisjRest), false);
-		auto [status, cex] = checkAssertion(&*unlessOK);
+							 std::move(acycDisjRest), false, false);
+		auto [status, cex] = checkAssertion(*unlessOK);
 		if (!status) {
 			std::cerr << "[Error] \"unless\" clause does not imply acyclicity "
 				     "constraint: "
-				  << *ac << "\n";
+				  << *currentCst << "\n";
 			printCounterexample(cex);
 			status = false;
 		}
@@ -864,352 +996,271 @@ auto Kater::checkExportRequirements() -> bool
 	}
 
 	/* Ensure that all saved relations are included in pporf;ppo and are transitive */
-	std::for_each(module.svar_begin(), module.svar_end(), [&](auto &kv) {
-		auto &sv = kv.second;
+	auto *ppo = module.getPPODeclaration()->getRE();
+	for (auto &let : module.lets()) {
+		if (dynamic_cast<const NoSavedExp *>(let->getSaved()))
+			continue;
+
 		Counterexample cex;
-		if (sv.status != VarStatus::View) {
+		if (!dynamic_cast<const ViewExp *>(let->getSaved())) {
 			auto savedInPO = SubsetConstraint::create(
-				sv.exp->clone(),
+				let->getRE()->clone(),
 				StarRE::createOpt(SeqRE::createOpt(
 					StarRE::createOpt(pporf->clone()), ppo->clone())),
-				false);
-			auto result = checkAssertion(&*savedInPO);
+				false, false);
+			auto result = checkAssertion(*savedInPO);
 			if (!result.result) {
 				std::cerr << "[Error] Saved relation not included in pporf;ppo: "
-					  << *sv.exp << "\n";
+					  << *let->getRE() << "\n";
 				printCounterexample(result.cex);
 				status = false;
 			}
 		} else {
 			auto savedInPO = SubsetConstraint::create(
-				sv.exp->clone(),
-				StarRE::createOpt(SeqRE::createOpt(
-					StarRE::createOpt(module.getPORF()->clone()),
-					module.getRegisteredID("po"))),
-				false);
-			auto result = checkAssertion(&*savedInPO);
+				let->getRE()->clone(),
+				AltRE::createOpt(
+					SeqRE::createOpt(StarRE::createOpt(module.createPORF()),
+							 module.getRegisteredRE("po")->clone()),
+					RegExp::createId()),
+				false, false);
+			auto result = checkAssertion(*savedInPO);
 			if (!result.result) {
-				std::cerr << "[Error] View not included in porf;po: " << *sv.exp
-					  << "\n";
+				std::cerr << "[Error] View not included in porf;po | id: "
+					  << *let->getRE() << "\n";
 				printCounterexample(result.cex);
 				status = false;
 			}
 		}
 
-		if (sv.status != VarStatus::Normal) {
+		if (!dynamic_cast<const NoSavedExp *>(let->getSaved())) {
 			cex.clear();
-			auto prefix = (sv.status == VarStatus::Reduce) ? sv.red->clone()
-								       : ppo->clone();
-			auto seqExp = SeqRE::createOpt(std::move(prefix), sv.exp->clone());
-			auto savedTrans = SubsetConstraint::createOpt(std::move(seqExp),
-								      sv.exp->clone(), false);
-			auto result = checkAssertion(&*savedTrans);
+			// FIXME: If we ever allow customly-reduced relations, prefix needs to be
+			// changed auto prefix = (sv.status == VarStatus::Reduce) ? sv.red->clone()
+			// 					       : ppo->clone();
+			auto prefix = ppo->clone();
+			auto seqExp = SeqRE::createOpt(std::move(prefix), let->getRE()->clone());
+			auto savedTrans = SubsetConstraint::createOpt(
+				std::move(seqExp), let->getRE()->clone(), false, false);
+			auto result = checkAssertion(*savedTrans);
 			if (!result.result) {
-				std::cerr << "[Error] Reduced relation not transitive: " << *sv.exp
-					  << "\n";
+				std::cerr << "[Error] Reduced relation not transitive: "
+					  << *let->getRE() << "\n";
 				printCounterexample(result.cex);
 				status = false;
 			}
 		}
-	});
 
-	/* Ensure that only one coherence constraint has been given, and that it involves a view */
-	if (module.getCohNum() != 1) {
-		std::cerr << "[Error] Only one coherence constraint is supported\n";
-		return false;
-	}
-	auto *coh = dynamic_cast<CharRE *>(&**module.coh_begin());
-	if ((coh == nullptr) || !coh->getLabel().getRelation()) {
-		std::cerr << "[Error] Coherence constraint needs to take a view argument\n";
-		return false; /* skip the rest of the checks */
-	}
-	auto vIt = std::find_if(module.svar_begin(), module.svar_end(), [&](auto &kv) {
-		return kv.first == *coh->getLabel().getRelation() &&
-		       kv.second.status == VarStatus::View;
-	});
-	if (vIt == module.svar_end()) {
-		std::cerr << "[Error] Coherence constraint needs to take a view argument\n";
-		status = false;
+		/* For mutually recursive views, check that we can export them in some order
+		 */
+		if (dynamic_cast<const ViewExp *>(let->getSaved()) &&
+		    dynamic_cast<const MutRecRE *>(let->getRE())) {
+			if (!constructRecCallGraph(dynamic_cast<const MutRecRE *>(let->getRE()))
+				     .transClosure()
+				     .isIrreflexive()) {
+				std::cerr << "[Error] Could not resolve view calculation "
+					     "order: "
+					  << *let->getRE() << "\n";
+				status = false;
+			}
+		}
 	}
 	return status;
 }
 
-void Kater::generateNFAs()
+/* Helper function that, given an expression r ~ A | C;b+ applies FUN to b+ */
+template <typename F> void foreachTrailingTransBuiltin(std::unique_ptr<RegExp> &reUP, F &&fun)
+{
+	if (auto *charRE = dynamic_cast<const CharRE *>(&*reUP))
+		return;
+
+	/* If r ~ A | B or r ~ A? or r ~ A* or r ~ r;A, recurse to kids */
+	auto *qmarkRE = dynamic_cast<const QMarkRE *>(&*reUP);
+	auto *altRE = dynamic_cast<const AltRE *>(&*reUP);
+	auto *starRE = dynamic_cast<const AltRE *>(&*reUP);
+	auto *mutRecRE = dynamic_cast<const MutRecRE *>(&*reUP);
+	if (qmarkRE || altRE || starRE || mutRecRE) {
+		for (auto &kRE : reUP->kids())
+			foreachTrailingTransBuiltin(kRE, fun);
+		return;
+	}
+
+	/* If r ~ A;...;C recurse to C */
+	if (auto *seqRE = dynamic_cast<const SeqRE *>(&*reUP)) {
+		foreachTrailingTransBuiltin(reUP->getKid(reUP->getNumKids() - 1), fun);
+		return;
+	}
+
+	/* If r ~ B+ apply FUN if B is builtin; recurse otherwise */
+	auto *plusRE = dynamic_cast<const PlusRE *>(&*reUP);
+	assert(plusRE);
+	if (auto *charRE = dynamic_cast<const CharRE *>(plusRE->getKid(0))) {
+		if (charRE->isRelation() && charRE->getLabel().getRelation()->isBuiltin())
+			fun(reUP);
+		return;
+	}
+	foreachTrailingTransBuiltin(reUP->getKid(0), fun);
+}
+
+/*
+ * Given the definition of a recursive expression r,
+ * returns all builtins b such that r = r?;A;...;b+
+ */
+auto collectTrailingTransBuiltins(Relation rel, std::unique_ptr<RegExp> &re)
+	-> VSet<std::unique_ptr<CharRE>>
+{
+	/* If it's not a sequence, quit */
+	auto *seqRE = dynamic_cast<const SeqRE *>(&*re);
+	if (!seqRE)
+		return {};
+
+	/* Otherwise, collect CharRE UPs, as we might want to edit those REs in place later */
+	VSet<std::unique_ptr<CharRE>> result;
+
+	/* Helper function that will be applied to collect builtins (re ~ b+) */
+	auto collectTrailingFun = [&](std::unique_ptr<RegExp> &re) {
+		result.insert(std::unique_ptr<CharRE>(
+			dynamic_cast<CharRE *>(re->getKid(0)->clone().release())));
+	};
+
+	/* If r is a sequence, it has to start with r or r? (i.e., be recursive) */
+	if (auto *charRE = dynamic_cast<const CharRE *>(seqRE->getKid(0))) {
+		if (charRE->isRelation() && *charRE->getLabel().getRelation() == rel)
+			foreachTrailingTransBuiltin(re->getKid(1), collectTrailingFun);
+	}
+	if (auto *qmarkRE = dynamic_cast<const QMarkRE *>(seqRE->getKid(0))) {
+		auto *charRE = dynamic_cast<const CharRE *>(qmarkRE->getKid(0));
+		if (charRE && charRE->isRelation() && *charRE->getLabel().getRelation() == rel)
+			foreachTrailingTransBuiltin(re->getKid(1), collectTrailingFun);
+	}
+	return result;
+}
+
+void Kater::optimizeModuleForExport()
 {
 	auto &module = getModule();
 	auto &theory = module.getTheory();
-	auto &cnfas = getCNFAs();
-	auto ppo = module.getPPO();
 
-	auto i = 0U;
-	std::for_each(module.svar_begin(), module.svar_end(), [&](auto &kv) {
-		auto &v = kv.second;
-		NFA n = v.exp->toNFA(theory);
-
-		// FIXME: Use polymorphism
-		if (v.status == VarStatus::Reduce) {
-			if (getConf().verbose >= 3) {
-				std::cout << "Generating NFA for reduce[" << i << "] = " << *v.exp
-					  << std::endl;
-			}
-
-			auto *pRE = dynamic_cast<PlusRE *>(&*v.exp);
-			assert(pRE); // FIXME: currently we implicitly assume this (see
-				     // transitivize); maybe tip?
-			assert(v.red);
-
-			n = pRE->getKid(0)->toNFA(theory);
-
-			simplify(n, theory);
-			reduce(n, v.redT, theory);
-
-			NFA rn = v.red->toNFA(theory);
-			rn.star();
-			simplify(rn, theory);
-			rn.seq(std::move(n));
-			simplify(rn, theory);
-
-			if (getConf().verbose >= 3) {
-				std::cout << "Generated NFA for reduce[" << i << "]: " << rn
-					  << std::endl;
-			}
-
-			cnfas.addReduced(std::move(rn));
-		} else if (v.status == VarStatus::View) {
-			if (getConf().verbose >= 3) {
-				std::cout << "Generating NFA for view[" << i << "] = " << *v.exp
-					  << std::endl;
-			}
-
-			auto *pRE = dynamic_cast<PlusRE *>(&*v.exp);
-			assert(pRE); // FIXME: currently we implicitly assume this (see
-				     // transitivize); maybe tip?
-
-			n = pRE->getKid(0)->toNFA(theory);
-			simplify(n, theory);
-
-			if (getConf().verbose >= 3) {
-				std::cout << "Generated NFA for view[" << i << "]: " << n
-					  << std::endl;
-			}
-			cnfas.addView(std::move(n));
-
-			if (kv.first == dynamic_cast<CharRE *>(&**module.coh_begin())
-						->getLabel()
-						.getRelation()) {
-				cnfas.setCohIndex(i);
-			}
-			if (kv.first ==
-			    dynamic_cast<CharRE *>(&*module.getHB())->getLabel().getRelation()) {
-				cnfas.setHbIndex(i);
-			}
-		} else {
-			if (getConf().verbose >= 3) {
-				std::cout << "Generating NFA for save[" << i << "] = " << *v.exp
-					  << std::endl;
-			}
-			simplify(n, theory);
-			if (getConf().verbose >= 3) {
-				std::cout << "Generated NFA for save[" << i << "]: " << n
-					  << std::endl;
-			}
-			cnfas.addSaved(std::move(n));
-		}
-		++i;
-	});
-
-	for (const auto &c : module.acycs()) {
-		auto &r = c->getKid(0);
-		if (getConf().verbose >= 3) {
-			std::cout << "Generating NFA for acyclic " << *r << std::endl;
-		}
-		// Covert the regural expression to an NFA
-		auto tr = r->clone();
-		transitivizeSaved(tr, module);
-		NFA n = tr->toNFA(theory);
-		// Take the reflexive-transitive closure, which typically helps minizing the NFA.
-		// Doing so is alright because the generated DFS code discounts empty paths anyway.
-		n.star();
-		if (getConf().verbose >= 4) {
-			std::cout << "Non-simplified NFA: " << n << std::endl;
-		}
-		// Simplify the NFA
-		simplify(n, theory);
-		if (getConf().verbose >= 3) {
-			std::cout << "Generated acyclic NFA: " << n
-				  << "\nAcyclic size: " << n.size() << "\n";
-		}
-
-		auto u = dynamic_cast<const AcyclicConstraint *>(&*c)->getConstraint();
-		if (!u || !u->isEmpty()) {
-			if (u) {
-				std::cerr << "[Warning] Ignoring non-emptiness constraint used for "
-					     "unless clause: "
-					  << *u << "\n";
-			}
-			cnfas.addAcyclic(std::move(n));
+	/* Calculate export order for views */
+	// FIXME: When we update to C++23, consider chunk_by()
+	auto svars = module.lets();
+	for (auto it = svars.begin(), ie = svars.end(); it != ie; ++it) {
+		if (!dynamic_cast<const MutRecRE *>((*it)->getRE())) {
 			continue;
 		}
 
-		auto tu = u->getKid(0)->clone();
-		transitivizeSaved(tu, module);
-		NFA m = tu->toNFA(theory);
-		// m.star();
-		simplify(m, theory);
-
-		cnfas.addAcyclic(std::move(n),
-				 dynamic_cast<const AcyclicConstraint *>(&*c)->getPrintInfo(),
-				 {std::move(m)});
+		auto prevIt = it;
+		auto *mutRecRE = dynamic_cast<const MutRecRE *>((*it)->getRE());
+		auto recs = mutRecRE->recs();
+		auto graph = constructRecCallGraph(mutRecRE).transClosure();
+		while (it != ie && dynamic_cast<const MutRecRE *>((*it)->getRE()) &&
+		       std::ranges::find(recs, dynamic_cast<const MutRecRE *>((*it)->getRE())
+						       ->getRelation()) != recs.end()) {
+			++it;
+		}
+		std::sort(prevIt, it, [&](auto &let1, auto &let2) {
+			auto rel1 = dynamic_cast<const MutRecRE *>(let1->getRE())->getRelation();
+			auto rel2 = dynamic_cast<const MutRecRE *>(let2->getRE())->getRelation();
+			return graph(rel1, rel2);
+		});
+		--it;
 	}
 
-	std::for_each(module.incl_begin(), module.incl_end(), [&](auto &ic) {
-		const Constraint *c = nullptr; // FIXME: refactor
-		if (auto *ec = dynamic_cast<const ErrorConstraint *>(&*ic)) {
-			c = ec->getConstraint();
-		} else if (auto *wc = dynamic_cast<const WarningConstraint *>(&*ic)) {
-			c = wc->getConstraint();
-		} else {
-			assert(0);
+	/* Optimize calculation for transitive views */
+	for (auto &let : module.lets()) {
+		auto *plusRE = dynamic_cast<const PlusRE *>(let->getRE());
+		if (!plusRE || !dynamic_cast<const ViewExp *>(let->getSaved())) {
+			continue;
 		}
 
-		if (getConf().verbose >= 3) {
-			std::cout << "Generating NFA for inclusion " << *c->getKid(0)
-				  << " <= " << *c->getKid(1) << std::endl;
-		}
+		auto rel = Relation::createUser();
+		auto newViewRE =
+			SeqRE::createOpt(QMarkRE::createOpt(CharRE::create(TransLabel(rel))),
+					 plusRE->getKid(0)->clone());
+		std::vector<std::unique_ptr<RegExp>> defs;
+		defs.emplace_back(newViewRE->clone());
+		auto newRE = MutRecRE::createOpt(rel, {rel}, std::move(defs));
+		std::cerr << "[Warning] Transforming transitive expression ";
+		let->getRE()->dump(std::cerr, &theory);
+		std::cerr << " to " << *newRE << "\n";
 
-		// Covert the regural expression to an NFA
-		auto tl = c->getKid(0)->clone();
-		transitivizeSaved(tl, module);
-		auto lhs = tl->toNFA(theory);
-		// Take the reflexive-transitive closure, which typically helps minizing the NFA.
-		// Doing so is alright because the generated DFS code discounts empty paths anyway.
-		// lhs.star();
-		if (getConf().verbose >= 4) {
-			std::cout << "Non-simplified NFA (LHS): " << lhs << std::endl;
-		}
-		// Simplify the NFA
-		simplify(lhs, theory);
-		if (getConf().verbose >= 3) {
-			std::cout << "Generated NFA (LHS): " << lhs << std::endl;
-		}
-
-		// Covert the regural expression to an NFA
-		auto tr = c->getKid(1)->clone();
-		transitivizeSaved(tr, module);
-		auto rhs = tr->toNFA(theory);
-		// Take the reflexive-transitive closure, which typically helps minizing the NFA.
-		// Doing so is alright because the generated DFS code discounts empty paths anyway.
-		// rhs.star();
-		if (getConf().verbose >= 4) {
-			std::cout << "Non-simplified NFA (RHS): " << rhs << std::endl;
-		}
-		// Simplify the NFA
-		simplify(rhs, theory);
-		if (getConf().verbose >= 3) {
-			std::cout << "Generated NFA (RHS): " << rhs << std::endl;
-		}
-
-		auto j = -1;
-		auto *rhsRE = dynamic_cast<const CharRE *>(c->getKid(1));
-		if (rhsRE && rhsRE->getLabel().getRelation()) {
-			for (auto sIt = module.svar_begin(), sE = module.svar_end(); sIt != sE;
-			     ++sIt) {
-				if (sIt->second.status == VarStatus::View &&
-				    sIt->first == rhsRE->getLabel().getRelation()) {
-					j = std::distance(module.svar_begin(), sIt);
-				}
-			}
-		}
-
-		cnfas.addInclusion(
-			{Inclusion<NFA>(
-				 std::move(lhs), std::move(rhs),
-				 dynamic_cast<const ErrorConstraint *>(&*ic)
-					 ? Constraint::Type::Error
-					 : Constraint::Type::Warning,
-				 dynamic_cast<const ErrorConstraint *>(&*ic)
-					 ? dynamic_cast<const ErrorConstraint *>(&*ic)->getName()
-					 : dynamic_cast<const WarningConstraint *>(&*ic)
-						   ->getName()),
-			 j});
-	});
-
-	NFA rec;
-	std::for_each(module.rec_begin(), module.rec_end(), [&](auto &r) {
-		if (getConf().verbose >= 3) {
-			std::cout << "Generating NFA for recovery " << *r << std::endl;
-		}
-		// Covert the regural expression to an NFA
-		auto tr = r->clone();
-		transitivizeSaved(tr, module);
-		NFA n = tr->toNFA(theory);
-		// Take the reflexive-transitive closure, which typically helps minizing the NFA.
-		// Doing so is alright because the generated DFS code discounts empty paths anyway.
-		if (getConf().verbose >= 4) {
-			std::cout << "Non-star, non-simplified rec NFA: " << n << std::endl;
-		}
-		n.star();
-		if (getConf().verbose >= 4) {
-			std::cout << "Non-simplified rec NFA: " << n << std::endl;
-		}
-		// Simplify the NFA
-		simplify(n, theory);
-		if (getConf().verbose >= 3) {
-			std::cout << "Generated rec NFA: " << n << std::endl;
-		}
-		rec.alt(std::move(n));
-	});
-	if (module.getRecoveryNum() != 0u) {
-		auto rf = module.getRegisteredID("rf");
-		auto recov = module.getRegisteredID("REC");
-		auto po = module.getRegisteredID("po");
-		auto fr = module.getRegisteredID("fr");
-		auto poInv = module.getRegisteredID("po");
-		poInv->flip();
-
-		auto rfRecovPoFr =
-			SeqRE::createOpt(rf->clone(), recov->clone(), po->clone(), fr->clone());
-
-		auto rfRecovPoInvFr =
-			SeqRE::createOpt(rf->clone(), recov->clone(), poInv->clone(), fr->clone());
-
-		rec.alt(rfRecovPoFr->toNFA(theory));
-		rec.alt(rfRecovPoInvFr->toNFA(theory));
-
-		rec.star();
-
-		if (getConf().verbose >= 3) {
-			std::cout << "Generated full rec NFA: " << rec << std::endl;
-		}
-
-		simplify(rec, theory);
-
-		cnfas.addRecovery(std::move(rec));
-		if (getConf().verbose >= 3) {
-			std::cout << "Generated full rec NFA simplified: " << cnfas.getRecovery()
-				  << std::endl;
+		auto oldRE = plusRE->clone(); // copy so that it doesn't get replaced in place
+		module.replaceAllUsesWith(&*oldRE, &*newRE);
+		for (auto &let : module.lets()) {
+			auto *viewExp = dynamic_cast<ViewExp *>(let->getSaved());
+			if (!viewExp)
+				continue;
+			if (*viewExp->getRE() == *newRE)
+				viewExp->setRE(newViewRE->clone());
 		}
 	}
 
-	auto pporfNFA = module.getPPORF()->toNFA(theory);
-	simplify(pporfNFA, theory);
-	cnfas.addPPoRf(std::move(pporfNFA), module.isDepTracking());
-	if (getConf().verbose >= 3) {
-		std::cout << "Generated pporf NFA simplified: " << cnfas.getPPoRf().first
-			  << std::endl;
-	}
+	/* Replace builtins with their transitive counterparts for more efficient codegen */
+	auto oldPo = module.getRegisteredRE("po")->clone();
+	auto newPo = PlusRE::createOpt(module.getRegisteredRE("po-imm")->clone());
+	auto oldPoloc = module.getRegisteredRE("po-loc")->clone();
+	auto newPoloc = PlusRE::createOpt(module.getRegisteredRE("po-loc-imm")->clone());
+	auto oldMo = module.getRegisteredRE("mo")->clone();
+	auto newMo = PlusRE::createOpt(module.getRegisteredRE("mo-imm")->clone());
+	auto oldFr = module.getRegisteredRE("fr")->clone();
+	auto newFr = SeqRE::createOpt(module.getRegisteredRE("fr-imm")->clone(),
+				      StarRE::createOpt(module.getRegisteredRE("mo-imm")->clone()));
+	auto oldRmw = module.getRegisteredRE("rmw")->clone();
+	auto newRmw = SeqRE::createOpt(module.getRegisteredRE("UR")->clone(),
+				       module.getRegisteredRE("po-imm")->clone(),
+				       module.getRegisteredRE("UW")->clone());
+	module.replaceAllUsesWith(&*oldPo, &*newPo);
+	module.replaceAllUsesWith(&*oldPoloc, &*newPoloc);
+	module.replaceAllUsesWith(&*oldMo, &*newMo);
+	module.replaceAllUsesWith(&*oldFr, &*newFr);
+	module.replaceAllUsesWith(&*oldRmw, &*newRmw);
 
-	cnfas.setDepTracking(module.isDepTracking());
+	/* Try and de-transitivize transitive primitives */
+	for (auto &let : module.lets()) {
+		auto *mutRecRE = dynamic_cast<MutRecRE *>(let->getRE());
+		auto *viewExp = dynamic_cast<ViewExp *>(let->getSaved());
+		if (!mutRecRE || !viewExp) {
+			continue;
+		}
+
+		/* Helper function to check if a relation is closed w.r.t. some builtin */
+		auto isRecREClosedWRTBuiltin = [&](auto &builtinRE) {
+			auto recBuiltin = SeqRE::createOpt(mutRecRE->clone(), builtinRE->clone());
+			auto recBuiltinInRec = SubsetConstraint::create(
+				std::move(recBuiltin), mutRecRE->clone(), false, false);
+			return checkAssertion(*recBuiltinInRec).result;
+		};
+
+		/* Get the respective recursive def */
+		std::vector<std::pair<std::unique_ptr<RegExp>, std::unique_ptr<RegExp>>> toRepl;
+		for (auto &builtinRE :
+		     collectTrailingTransBuiltins(mutRecRE->getRelation(), viewExp->getRERef()) |
+			     std::views::filter(isRecREClosedWRTBuiltin)) {
+			std::cerr << "[Warning] Replacing " << *builtinRE
+				  << "+ with its immediate counterpart in " << let->getName()
+				  << " = " << *viewExp->getRE() << "\n";
+			auto newRE = viewExp->getRE()->clone();
+			auto toReplaceRE = PlusRE::create(builtinRE->clone());
+			foreachTrailingTransBuiltin(newRE, [&](std::unique_ptr<RegExp> &builtin) {
+				replaceREWith(builtin, &*toReplaceRE, &*builtinRE);
+			});
+			std::cerr << "Result: " << *newRE << "\n";
+
+			toRepl.emplace_back(viewExp->getRE()->clone(), std::move(newRE));
+		}
+
+		for (auto &[from, to] : toRepl)
+			module.replaceAllUsesWith(&*from, &*to);
+	}
 }
 
-auto Kater::exportCode(std::string &dirPrefix, std::string &outPrefix) -> bool
+auto Kater::exportCode() -> bool
 {
 	if (!checkExportRequirements())
 		return false;
 
-	generateNFAs();
+	optimizeModuleForExport();
 
-	Printer p(getModule(), dirPrefix, outPrefix);
-	p.output(getCNFAs());
+	GenMCPrinter p(getModule(), getConf());
+	p.output();
 	return true;
 }

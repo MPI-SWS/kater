@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15...3.28)
-project(kater VERSION 0.2 LANGUAGES CXX)
+project(kater VERSION 0.3 LANGUAGES CXX)
 
 # clang-tidy integration
 option(TIDY "Run clang-tidy")

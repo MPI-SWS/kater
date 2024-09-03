@@ -72,12 +72,6 @@ public:
 		return !getRelation().has_value() || getRelation()->isBuiltin();
 	}
 
-	[[nodiscard]] auto getCalcIndex() const -> int
-	{
-		assert(!isBuiltin());
-		return -(getRelation()->getID() + 1);
-	}
-
 	void flip()
 	{
 		/* Do not flip ε transitions; maintain unique representation */

@@ -1,0 +1,10 @@
+relation nrf
+relation nrf-1
+relation nmo
+
+let nfr = nrf-1 ; nmo
+let eco1 = (nrf | nmo | nfr)+
+let eco2 = (nrf | nmo;nrf? | nfr;nrf?)
+
+assert eco2 <= eco1
+assert eco1 <= eco2

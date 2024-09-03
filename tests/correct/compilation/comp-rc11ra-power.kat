@@ -23,8 +23,7 @@ let ar = obs | (mo | prop)+
 
 assume [R;ACQ];po <= [R;ACQ];po;[F];po
 assume po;[REL;W] <= po;[F];po;[REL;W]
-assume rfe;rmw <= mo-imm
-assume rfi;rmw <= mo-imm
+assume rf;rmw <= mo
 
 assert (fr;rf?) ; rc11::hb;[R|W] & id <= obs | (rc11::eco)+;po?;(rc11::eco)*
 assert (mo;rfe?) ; rc11::hb;[W] & id <= (mo |prop)+ | (rc11::eco)+;po?;(rc11::eco)*

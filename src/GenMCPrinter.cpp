@@ -85,7 +85,7 @@ std::vector<Event>
 {
 	std::vector<Event> result;
 
-	for (const auto &lab : labels(getGraph())) {
+	for (const auto &lab : getGraph().labels()) {
 		if (auto *rLab = llvm::dyn_cast<ReadLabel>(&lab))
 			if (rLab->getRf()->getPos().isInitializer() && rLab->getAddr() == addr)
 				result.push_back(rLab->getPos());
@@ -1179,8 +1179,8 @@ void GenMCPrinter::printSubset(const SubsetConstraint *subCst, std::string prefi
 		      << "\t\tif (" << paramsLHS.status << "Accepting[i] && !" << paramsRHS.status
 		      << "Accepting[i]) {\n";
 		if (counterexample) {
-			cpp() << "\t\t\tcexLab = &*std::find_if(label_begin(g), "
-				 "label_end(g), "
+			cpp() << "\t\t\tcexLab = &*std::find_if(g.label_begin(), "
+				 "g.label_end(), "
 				 "[&](auto &lab){ "
 				 "return "
 				 "lab.getStamp() == i; });\n";
@@ -1318,7 +1318,7 @@ void GenMCPrinter::printAcyclic(const AcyclicConstraint *acycCst, std::string pr
 	printInitializations();
 	cpp() << "\treturn true";
 	for (auto &sUP : nfa.accepting()) {
-		cpp() << "\n\t\t&& std::ranges::all_of(labels(g), [&](auto &lab){ return ";
+		cpp() << "\n\t\t&& std::ranges::all_of(g.labels(), [&](auto &lab){ return ";
 		if (params.visit.at(&*sUP)) {
 			cpp() << params.status << "_" << params.ids.at(&*sUP)
 			      << "[lab.getStamp().get()]"
@@ -1388,7 +1388,7 @@ void GenMCPrinter::printCoherence(const CoherenceConstraint *cohCst)
 	printInitializations();
 	cpp() << "\treturn true";
 	for (auto &sUP : nfa.accepting()) {
-		cpp() << "\n\t\t&& std::ranges::all_of(labels(g), [&](auto &lab){ return ";
+		cpp() << "\n\t\t&& std::ranges::all_of(g.labels(), [&](auto &lab){ return ";
 		if (params.visit.at(&*sUP)) {
 			cpp() << params.status << "_" << params.ids.at(&*sUP)
 			      << "[lab.getStamp().get()]"

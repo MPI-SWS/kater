@@ -15,9 +15,12 @@ let fence_tso = ([W]; po; [F]; po; [W]) | ([R]; po; [F]; po; [R|W])
 let amo = rmw
 let riscv_rmw = amo
 
-let rdw =  fre ; po-loc ;rfe
-let AQ = [R ; ACQ]
-let RL = [W ; REL]
+let rdw = [R];po-loc;[R];([W]; fre; [W])?; rfe
+let AcqRel = [ACQ] | [REL] | [SC]
+let AQ = [ACQ] | [AcqRel]
+let RL = [REL] | [AcqRel]
+let RCsc_test = [ACQ] | [REL] | [AcqRel] | [amo]
+let RCsc = [RCsc_test]
 
 let fence = fence_r_r|fence_r_w|fence_r_rw
             |fence_w_r|fence_w_w|fence_w_rw
@@ -26,13 +29,13 @@ let fence = fence_r_r|fence_r_w|fence_r_rw
 
 // Overlapping-Address Orderings
 let r1 = [R|W];po-loc;[W]
-let r2 = [R];po-loc;[R]
+let r2 = rdw
 let r3 = [amo|UW];rfi;[R]
 // Explicit Synchronization
 let r4 = fence
 let r5 = [AQ];po
 let r6 = po;[RL]
-let r7 = [RL];po;[AQ]
+let r7 = [RCsc]; po; [RCsc]
 let r8 = riscv_rmw
 // Syntactic Dependencies
 let r9 = addr

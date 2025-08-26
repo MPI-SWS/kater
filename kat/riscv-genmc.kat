@@ -15,7 +15,7 @@ let fence_tso = ([W]; po; [F]; po; [W]) | ([R]; po; [F]; po; [R|W])
 let amo = rmw
 let riscv_rmw = amo
 
-let rdw = [R];po-loc;[R];([W]; fre; [W])?; rfe
+let rdw = [po-loc ; (fre ; rfe)] ; [W]
 let AcqRel = [ACQ] | [REL] | [SC]
 let AQ = [ACQ] | [AcqRel]
 let RL = [REL] | [AcqRel]
@@ -63,7 +63,7 @@ let ppo =
 
 let risc = mo | rfe | fr | ppo
 
-view hb_stable = (ppo)+
+view hb_stable = (po | (rf | tc | tj); po)+
 export coherence hb_stable
 
 export acyclic risc

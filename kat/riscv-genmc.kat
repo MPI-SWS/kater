@@ -1,0 +1,92 @@
+let fence_r_r   = [R]; po; [F]; po; [R]
+let fence_r_w   = [R]; po; [F]; po; [W]
+let fence_r_rw  = [R]; po; [F]; po; [R|W]
+let fence_w_r   = [W]; po; [F]; po; [R]
+let fence_w_w   = [W]; po; [F]; po; [W]
+let fence_w_rw  = [W]; po; [F]; po; [R|W]
+let fence_rw_r  = [R|W]; po; [F]; po; [R]
+let fence_rw_w  = [R|W]; po; [F]; po; [W]
+let fence_rw_rw = [R|W]; po; [F]; po; [R|W]
+
+// TSO special fence
+let fence_tso = ([W]; po; [F]; po; [W]) | ([R]; po; [F]; po; [R|W])
+
+// Atomic RMW relation
+let amo = rmw
+let riscv_rmw = amo
+
+let rdw = [po-loc ; (fre ; rfe)] ; [W]
+let AcqRel = [ACQ] | [REL] | [SC]
+let AQ = [ACQ] | [AcqRel]
+let RL = [REL] | [AcqRel]
+let RCsc_test = [ACQ] | [REL] | [AcqRel] | [amo]
+let RCsc = [RCsc_test]
+
+let fence = fence_r_r|fence_r_w|fence_r_rw
+            |fence_w_r|fence_w_w|fence_w_rw
+            |fence_rw_r|fence_rw_w|fence_rw_rw
+            |fence_tso
+
+// Overlapping-Address Orderings
+let r1 = [R|W];po-loc;[W]
+let r2 = rdw
+let r3 = [amo|UW];rfi;[R]
+// Explicit Synchronization
+let r4 = fence
+let r5 = [AQ];po
+let r6 = po;[RL]
+let r7 = [RCsc]; po; [RCsc]
+let r8 = riscv_rmw
+// Syntactic Dependencies
+let r9 = addr
+let r10 = data;[W]
+let r11 = ctrl;[W]
+// Pipeline Dependencies
+let r12 = [R];(addr|data);[W];rfi;[R]
+let r13 = [R];addr;[R|W];po;[W]
+
+let ppo =
+  r1
+| r2
+| r3
+| r4
+| r5
+| r6
+| r7
+| r8
+| r9
+| r10
+| r11
+| r12
+| r13
+
+
+let risc = mo | rfe | fr | ppo
+
+view hb_stable = (po | (rf | tc | tj); po)+
+export coherence hb_stable
+
+export acyclic risc
+
+// ---------------------------------------------------------------------
+// RISC-V error detection
+// ---------------------------------------------------------------------
+
+let ww_conflict = [W] ; loc-overlap ; [W]
+let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
+let conflicting = ww_conflict | wr_conflict
+let na_conflict = [NA] ; conflicting | conflicting ; [NA]
+view porf_stable = (po | (rf | tc | tj); po)+
+
+// GenMC needs to handle the no-alloc case (access validity)
+
+export error VE_AccessNonMalloc unless  alloc <= hb_stable
+export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0
+
+export error VE_AccessFreed     unless  alloc^-1? ; free ; [FREE] <= hb_stable
+export error VE_AccessFreed     unless  [FREE] ; free^-1 ; alloc = 0
+export error VE_AccessFreed     unless  [NOTHPPROT] ; alloc^-1? ; free ; [HPRET] <= hb_stable
+export error VE_AccessFreed     unless  [HPRET] ; free^-1 ; alloc ; [NOTHPPROT] = 0
+
+export error VE_RaceNotAtomic   unless  na_conflict <= hb_stable
+export warning VE_WWRace        unless  ww_conflict <= porf_stable

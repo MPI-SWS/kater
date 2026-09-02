@@ -50,6 +50,8 @@ public:
 	[[nodiscard]] auto assume_end() const { return assumes_.end(); }
 	[[nodiscard]] auto assumes() const { return std::ranges::ref_view(assumes_); }
 
+	[[nodiscard]] auto relations() const { return std::ranges::ref_view(relations_); }
+
 	auto getAssumeNum() const -> size_t { return assumes_.size(); }
 
 	void registerRelation(Relation r, RelationInfo info)
@@ -193,18 +195,6 @@ public:
 	{
 		assert(predicates_.contains(p.getID()));
 		return predicates_.find(p.getID())->second;
-	}
-
-	auto getName(const Relation &r) const -> const std::string &
-	{
-		assert(relations_.contains(r.getID()));
-		return relations_.find(r.getID())->second.name;
-	}
-
-	auto getName(const Predicate &p) const -> const std::string &
-	{
-		assert(predicates_.contains(p.getID()));
-		return predicates_.find(p.getID())->second.name;
 	}
 
 	auto getDomain(const Relation &r) const -> const PredicateSet &

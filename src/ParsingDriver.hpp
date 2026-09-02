@@ -25,9 +25,11 @@
 #include "TransLabel.hpp"
 #include "Utils.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <ostream>
 #include <ranges>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -41,13 +43,12 @@ class ParsingDriver {
 
 private:
 	struct State {
-		State(yy::location loc, FILE *in, std::string dir, std::string prefix)
-			: loc(loc), in(in), dir(std::move(dir)), prefix(std::move(prefix))
+		State(yy::location loc, std::string dir, std::string prefix)
+			: loc(loc), dir(std::move(dir)), prefix(std::move(prefix))
 		{
 		}
 
 		yy::location loc;
-		FILE *in;
 		std::string dir;
 		std::string prefix;
 	};
@@ -56,6 +57,14 @@ public:
 	ParsingDriver();
 
 	auto getLocation() -> yy::location & { return location; }
+
+	/* Bison's end column is one past the last character */
+	static auto toDbgInfo(const yy::location &loc) -> DbgInfo
+	{
+		return DbgInfo(loc.begin.filename, static_cast<int>(loc.begin.line),
+			       static_cast<int>(loc.begin.column), static_cast<int>(loc.end.line),
+			       static_cast<int>(loc.end.column) - 1);
+	}
 
 	auto getRegisteredREOrCreateTmpRec(const std::string id, const yy::location &loc)
 		-> std::unique_ptr<RegExp>
@@ -68,11 +77,16 @@ public:
 			return e ? e->clone() : nullptr;
 		};
 
-		// If regexp does not exist, register it, but keep
-		// track of it to ensure it's used in let rec
+		// If regexp does not exist, it can only be a forward reference to a
+		// relation defined within an enclosing "let rec" --- otherwise it is
+		// undeclared. In a rec context, register it as a placeholder, but keep
+		// track of it to ensure it's used in let rec.
 		auto re = getMaybeQualifiedRE(id);
 		if (!re) {
-			registerRelation(id, "", loc);
+			if (!recContext_)
+				reportUndeclaredRelation(id, loc);
+			// No per-location variant
+			registerRelation(id, {}, loc, /*perLoc=*/false);
 			recRels_.insert(findRegisteredRE(id));
 			return findRegisteredRE(id)->clone();
 		}
@@ -114,28 +128,29 @@ public:
 		return *charRE->getLabel().getPreChecks().begin();
 	}
 
-	void registerRelation(const std::string &id, const std::string &printID,
-			      const yy::location &loc)
+	void registerRelation(const std::string &id,
+			      const std::pair<std::string, std::string> &printID,
+			      const yy::location &loc, bool perLoc = true)
 	{
-		checkRelationDeclaration(id, printID, loc);
+		checkRelationDeclaration(id, loc);
 
 		RelationInfo info;
 		info.name = getQualifiedName(id);
-		info.genmc.succ = printID;
-		info.genmc.pred = printID;
-		info.dbg = {loc.end.filename, loc.end.line};
-		getModule()->registerRelation(Relation::createUser(), std::move(info));
+		info.genmc.pred = printID.first;
+		info.genmc.succ = printID.second;
+		info.dbg = toDbgInfo(loc);
+		getModule()->registerRelation(Relation::createUser(), std::move(info), perLoc);
 	}
 
 	void registerPredicate(const std::string &id, const std::string &printID,
 			       const yy::location &loc)
 	{
-		checkPredicateDeclaration(id, printID, loc);
+		checkPredicateDeclaration(id, loc);
 
 		PredicateInfo info;
 		info.name = getQualifiedName(id);
 		info.genmc = printID;
-		info.dbg = {loc.end.filename, loc.end.line};
+		info.dbg = toDbgInfo(loc);
 		getModule()->registerPredicate(Predicate::createUser(), std::move(info));
 	}
 
@@ -144,7 +159,7 @@ public:
 	void registerViewDerived(std::unique_ptr<LetStatement> let, const yy::location &loc)
 	{
 		let->setName(getQualifiedName(let->getName()));
-		checkDerivedDeclaration(let->getName(), let->getRE(), loc);
+		checkRelationDeclaration(let->getName(), loc);
 		getModule()->registerLet(std::move(let));
 	}
 
@@ -154,6 +169,10 @@ public:
 	void
 	registerRecViewDerived(std::vector<std::pair<std::string, std::unique_ptr<RegExp>>> defs,
 			       std::string codeToPrint, const yy::location &loc);
+
+	/* Toggle whether unknown relations are allowed as forward references
+	 * (only true while parsing a "let rec"/"view rec" body) */
+	void setRecContext(bool status) { recContext_ = status; }
 
 	// Handle "assert c" declaration in the input file
 	void registerAssert(std::unique_ptr<AssertStatement> assrt)
@@ -178,7 +197,7 @@ public:
 		auto *cohCst = dynamic_cast<CoherenceConstraint *>(exp->getConstraint());
 		if (cohCst && !findRegisteredStatement(cohCst->getID())) {
 			std::cerr << loc << ": ";
-			std::cerr << "Uknown relation used for coherence constraint\n";
+			std::cerr << "unknown relation used for coherence constraint\n";
 			exit(EPARSE);
 		}
 		if (cohCst && exp->isExtra()) {
@@ -188,14 +207,14 @@ public:
 		}
 		if (cohCst && getModule()->getCOHDeclaration()) {
 			std::cerr << loc << ": ";
-			std::cerr << "Only one coherence constraint is supported\n";
+			std::cerr << "only one coherence constraint is supported\n";
 			exit(EPARSE);
 		}
 		/* Fix the name for the constraint --- maybe needs qualification */
 		if (cohCst) {
 			cohCst->setID(findRegisteredStatement(cohCst->getID())->getName());
 		}
-		getModule()->registerExport(std::move(exp), loc);
+		getModule()->registerExport(std::move(exp));
 	}
 
 	/* Invoke the parser on INPUT. Return 0 on success. */
@@ -218,7 +237,7 @@ private:
 	[[nodiscard]] static auto getUnqualifiedName(const std::string &id) -> std::string
 	{
 		auto c = id.find_last_of(':');
-		return id.substr(c != std::string::npos ? c + 1 : c, std::string::npos);
+		return c != std::string::npos ? id.substr(c + 1) : id;
 	}
 
 	[[nodiscard]] auto isTmpRecursive(const RegExp *re) const -> bool
@@ -240,12 +259,9 @@ private:
 		return e ? e : getModule()->getRegisteredStatement(id);
 	}
 
-	void checkPredicateDeclaration(const std::string &id, const std::string &printID,
-				       const yy::location &loc);
-	void checkRelationDeclaration(const std::string &id, const std::string &printID,
-				      const yy::location &loc);
-	void checkDerivedDeclaration(const std::string &id, const RegExp *re,
-				     const yy::location &loc);
+	[[noreturn]] void reportUndeclaredRelation(const std::string &id, const yy::location &loc);
+	void checkPredicateDeclaration(const std::string &id, const yy::location &loc);
+	void checkRelationDeclaration(const std::string &id, const yy::location &loc);
 	void checkViewDeclaration(const std::string &id, const RegExp *re, const yy::location &loc);
 	void checkMutRecDeclaration(
 		const std::vector<std::pair<std::string, std::unique_ptr<RegExp>>> &defs,
@@ -271,8 +287,15 @@ private:
 	/* Current name prefix */
 	std::string prefix{};
 
+	/* Canonical paths of files already parsed; each one is included at most once */
+	std::set<std::filesystem::path> includedFiles_;
+
 	/* Temporary symbols stored during parsing */
 	VSet<const RegExp *> recRels_;
+
+	/* True while parsing a "let rec"/"view rec" body, where unknown
+	 * relations are permitted as forward references */
+	bool recContext_{};
 
 	/* The module build out of parsing */
 	std::unique_ptr<KatModule> module_{};

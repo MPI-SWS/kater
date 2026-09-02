@@ -21,6 +21,7 @@
 #include <climits>
 #include <cstdlib>
 #include <string>
+#include <vector>
 #include "ParsingDriver.hpp"
 #include "Parser.hpp"
 
@@ -86,6 +87,8 @@ disjoint		return yy::parser::make_DISJOINT(loc);
 error			return yy::parser::make_ERROR	(loc);
 export			return yy::parser::make_EXPORT	(loc);
 extra			return yy::parser::make_EXTRA	(loc);
+genmc_pred		return yy::parser::make_GENMC_PRED (loc);
+genmc_succ		return yy::parser::make_GENMC_SUCC (loc);
 genmc			return yy::parser::make_GENMC   (loc);
 id			return yy::parser::make_ID_REL	(loc);
 include			return yy::parser::make_INCLUDE	(loc);
@@ -100,7 +103,7 @@ view			return yy::parser::make_VIEW	(loc);
 unless			return yy::parser::make_UNLESS	(loc);
 warning			return yy::parser::make_WARNING	(loc);
 
-["][^\n]*["]		return yy::parser::make_QSTRING(yytext, loc);
+\"(\\.|[^"\\])*\"	return yy::parser::make_QSTRING(yytext, loc);
 {ALPHA}{EALPHA}*	return yy::parser::make_ID     (yytext, loc);
 
 ":"			return yy::parser::make_COLON  (loc);
@@ -133,3 +136,46 @@ warning			return yy::parser::make_WARNING	(loc);
 <<EOF>>			return yy::parser::make_YYEOF (loc);
 
 %%
+
+/*
+ * Switching files for an "include" must preserve the parent file's lexer state:
+ * the flex buffer still holds characters past the include directive (e.g. the
+ * trailing newline whose consumption advances the line counter), and the custom
+ * YY_INPUT reads from the global current_line buffer. yyrestart() would discard
+ * both. Instead we stack flex's buffer and the current_line globals per file.
+ */
+struct lexer_file_state {
+	FILE *in;
+	char *line;
+	size_t line_alloc;
+	ssize_t line_sent;
+	ssize_t line_len;
+};
+
+static std::vector<lexer_file_state> lexer_file_stack;
+
+void lexer_push_file(FILE *new_in)
+{
+	lexer_file_stack.push_back(
+		{yyin, current_line, current_line_alloc, current_line_sent, current_line_len});
+	current_line = NULL;
+	current_line_alloc = 0;
+	current_line_sent = 0;
+	current_line_len = 0;
+	yyin = new_in;
+	yypush_buffer_state(yy_create_buffer(new_in, YY_BUF_SIZE));
+}
+
+void lexer_pop_file()
+{
+	yypop_buffer_state();
+	free(current_line);
+
+	const auto &s = lexer_file_stack.back();
+	yyin = s.in;
+	current_line = s.line;
+	current_line_alloc = s.line_alloc;
+	current_line_sent = s.line_sent;
+	current_line_len = s.line_len;
+	lexer_file_stack.pop_back();
+}

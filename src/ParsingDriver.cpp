@@ -19,19 +19,29 @@
 #include "ParsingDriver.hpp"
 
 #include "Builtins.hpp"
+#include "DbgInfo.hpp"
+#include "Error.hpp"
+#include "SavedExp.hpp"
 
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <fstream>
+#include <filesystem>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <system_error>
+#include <utility>
 
 #define DEBUG_TYPE "parser"
 
-extern FILE *yyin;
-extern void yyrestart(FILE *);
+extern void lexer_push_file(FILE *);
+extern void lexer_pop_file();
 
 ParsingDriver::ParsingDriver() : module_(new KatModule) { registerBuiltins(*getModule()); }
 
-void ParsingDriver::saveState() { states.emplace_back(getLocation(), yyin, dir, getPrefix()); }
+void ParsingDriver::saveState() { states.emplace_back(getLocation(), dir, getPrefix()); }
 
 void ParsingDriver::restoreState()
 {
@@ -39,7 +49,7 @@ void ParsingDriver::restoreState()
 		return;
 
 	auto &s = states.back();
-	yyrestart(s.in);
+	lexer_pop_file();
 	location = s.loc;
 	dir = s.dir;
 	prefix = s.prefix;
@@ -48,29 +58,50 @@ void ParsingDriver::restoreState()
 
 auto ParsingDriver::parse(const std::string &name) -> int
 {
+	if (name.empty()) {
+		std::cerr << "no input file provided\n";
+		exit(EPARSE); // NOLINT(concurrency-mt-unsafe): parsing is single-threaded
+	}
+
+	/* Resolve the file against the includer's directory. The path is kept as
+	 * written (only lexically normalized) for diagnostics */
+	std::filesystem::path path(name);
+	if (path.is_relative()) {
+		path = std::filesystem::path(dir) / path;
+	}
+	path = path.lexically_normal();
+
+	/* Canonicalize the path (e.g., collapse ./, ../, etc) so that each file is
+	 * parsed at most once */
+	std::error_code err;
+	auto canonical = std::filesystem::weakly_canonical(path, err);
+	if (!includedFiles_.insert(err ? path : canonical).second) {
+		return 0;
+	}
+
+	/* Save parsing state, open the provided file, and automatically close it when scope ends */
 	saveState();
 
-	if (name.empty()) {
-		std::cerr << "no input file provided" << std::endl;
-		exit(EXIT_FAILURE);
+	const std::unique_ptr<FILE, int (*)(FILE *)> file(std::fopen(path.string().c_str(), "r"),
+							  &std::fclose);
+	if (!file) {
+		// NOLINTNEXTLINE(concurrency-mt-unsafe): parsing is single-threaded
+		std::cerr << "cannot open " << path << ": " << strerror(errno) << "\n";
+		exit(EPARSE); // NOLINT(concurrency-mt-unsafe): parsing is single-threaded
 	}
 
-	auto path = dir + name;
-	if ((yyin = fopen(path.c_str(), "r")) == nullptr) {
-		std::cerr << "cannot open " << path << ": " << strerror(errno) << std::endl;
-		exit(EXIT_FAILURE);
+	/* Store directory for nested includes (including trailing slash) */
+	dir = path.parent_path().string();
+	if (!dir.empty() && dir.back() != '/') {
+		dir += "/";
 	}
 
-	auto s = path.find_last_of("/");
-	dir = path.substr(0, s != std::string::npos ? s + 1 : std::string::npos);
+	/* Filename without extension */
+	prefix = path.stem().string();
 
-	auto d = path.find_last_of(".");
-	prefix = path.substr(s != std::string::npos ? s + 1 : 0,
-			     d == std::string::npos ? std::string::npos
-						    : (s != std::string::npos ? d - s - 1 : d - 1));
-
-	yyrestart(yyin);
-	location.initialize(&path);
+	lexer_push_file(file.get());
+	auto pathString = path.string();
+	location.initialize(&pathString);
 
 	yy::parser parser(*this);
 
@@ -80,8 +111,6 @@ auto ParsingDriver::parse(const std::string &name) -> int
 	// );
 
 	auto res = parser.parse();
-
-	fclose(yyin);
 
 	/* If @ top-level, save ppo, hb_stable */
 	if (states.size() == 1) {
@@ -97,81 +126,68 @@ auto ParsingDriver::parse(const std::string &name) -> int
 	return res;
 }
 
-auto collectUsedPrimitives(const RegExp *re) -> VSet<TransLabel>
+void ParsingDriver::reportUndeclaredRelation(const std::string &id, const yy::location &loc)
 {
-	auto collectPrimitives = [&](const RegExp *re, VSet<TransLabel> &result,
-				     auto &collectRef) -> void {
-		for (auto i = 0U; i < re->getNumKids(); i++) {
-			collectRef(re->getKid(i), result, collectRef);
-		}
-		if (const auto *charRE = dynamic_cast<const CharRE *>(&*re)) {
-			result.insert(charRE->getLabel());
-		}
-	};
-	VSet<TransLabel> result;
-	collectPrimitives(re, result, collectPrimitives);
-	return result;
-}
+	std::cerr << loc << ": undeclared relation/predicate (" << id << ")";
 
-void ParsingDriver::checkDerivedDeclaration(const std::string &id, const RegExp *re,
-					    const yy::location &loc)
-{
-	checkRelationDeclaration(id, "", loc);
+	/* If there is a definition with the same unqualified name in another namespace,
+	 * suggest it (module internal definitions) */
+	const auto *mod = getModule();
+	auto shortName = getUnqualifiedName(id);
+	VSet<std::string> hidden;
+	std::vector<std::string> suggestions;
 
-	auto *module = getModule();
-	auto prims = collectUsedPrimitives(&*re);
-
-	/* Unknown predicates are reported immediately; only search for relations.
-	 * (Relations are declared as user relations when they are first encountered) */
-	for (auto &lab : prims | std::views::filter([&](auto &lab) { return lab.isRelation(); })) {
-		assert(module->getTheory().hasInfo(*lab.getRelation()));
-		if (lab.getRelation()->isUser() && isTmpRecursive(&*CharRE::create(lab))) {
-			std::cerr << loc << ": ";
-			std::cerr << "Undeclared relation ("
-				  << module->getTheory().getInfo(*lab.getRelation()).name
-				  << ") used in definition of " << id << "\n";
-			exit(EPARSE);
-		}
+	for (const auto &[rid, info] : mod->getTheory().relations()) {
+		if (info.hidden)
+			hidden.insert(info.name);
 	}
+	for (const auto &let : mod->lets()) {
+		const auto &name = let->getName();
+		if (name != id && !hidden.contains(name) && getUnqualifiedName(name) == shortName)
+			suggestions.push_back(name);
+	}
+	if (!suggestions.empty()) {
+		std::cerr << "; did you mean ";
+		for (auto i = 0U; i < suggestions.size(); ++i)
+			std::cerr << (i != 0 ? ", " : "") << suggestions[i];
+		std::cerr << "?";
+	}
+	std::cerr << "\n";
+	exit(EPARSE);
 }
 
 void ParsingDriver::registerDerived(std::unique_ptr<LetStatement> let, const yy::location &loc)
 {
 	let->setName(getQualifiedName(let->getName()));
-	checkDerivedDeclaration(let->getName(), let->getRE(), loc);
+	checkRelationDeclaration(let->getName(), loc);
 	getModule()->registerLet(std::move(let));
 }
 
-void ParsingDriver::checkRelationDeclaration(const std::string &id, const std::string &printID,
-					     const yy::location &loc)
+void ParsingDriver::checkRelationDeclaration(const std::string &id, const yy::location &loc)
 {
 	const auto *re = findRegisteredRE(id);
 	if (!re || isTmpRecursive(re))
 		return;
 
 	const auto *charRE = dynamic_cast<const CharRE *>(&*re);
-	if (charRE && charRE->getLabel().isRelation()) {
-		const auto &info =
-			getModule()->getTheory().getInfo(*charRE->getLabel().getRelation());
+	if (charRE == nullptr)
+		return;
 
-		std::cerr << loc << ": ";
-		std::cerr << "identifier " << id << " already declared";
-		if (info.dbg.has_value())
-			std::cerr << " (previous declaration: " << *info.dbg << ")";
-		std::cerr << "\n";
-		exit(EPARSE);
-	}
-	if (charRE && charRE->getLabel().isPredicate()) {
-		const auto &info = getModule()->getTheory().getInfo(
-			*charRE->getLabel().getPreChecks().begin());
+	const auto &theory = getModule()->getTheory();
+	const auto &lab = charRE->getLabel();
+	std::optional<DbgInfo> prev;
+	if (lab.isRelation())
+		prev = theory.getInfo(*lab.getRelation()).dbg;
+	else if (lab.isPredicate())
+		prev = theory.getInfo(*lab.getPreChecks().begin()).dbg;
+	else
+		return;
 
-		std::cerr << loc << ": ";
-		std::cerr << "identifier " << id << " already declared";
-		if (info.dbg.has_value())
-			std::cerr << " (previous declaration: " << *info.dbg << ")";
-		std::cerr << "\n";
-		exit(EPARSE);
-	}
+	std::cerr << loc << ": " << "identifier " << id << " already declared";
+	if (prev.has_value())
+		std::cerr << " (previous declaration: " << *prev << ")";
+	std::cerr << "\n";
+	exit(EPARSE); // NOLINT(concurrency-mt-unsafe): parsing is single-threaded
 }
 
 void ParsingDriver::checkMutRecDisjunctLeftRec(const std::string &id, const RegExp *re,
@@ -198,9 +214,9 @@ void ParsingDriver::checkMutRecDisjunctLeftRec(const std::string &id, const RegE
 		if (containsRec && seqRE &&
 		    std::any_of(std::next(results.begin()), results.end(),
 				[&](auto result) { return result; })) {
-			std ::cerr << loc << ": "
-				   << "recursive relations can only be used in a left-recursive "
-				      "manner\n";
+			std::cerr << loc << ": "
+				  << "recursive relations can only be used in a left-recursive "
+				     "manner\n";
 			exit(EPARSE);
 		}
 
@@ -214,8 +230,7 @@ void ParsingDriver::checkMutRecDisjunctLeftRec(const std::string &id, const RegE
 	checkMutRecDisjunct(id, re, recs, checkMutRecDisjunct);
 }
 
-void ParsingDriver::checkPredicateDeclaration(const std::string &id, const std::string &printID,
-					      const yy::location &loc)
+void ParsingDriver::checkPredicateDeclaration(const std::string &id, const yy::location &loc)
 {
 	const auto *re = findRegisteredRE(id);
 	if (!re)
@@ -250,7 +265,7 @@ void ParsingDriver::checkMutRecDeclaration(
 			getRegisteredREOrCreateTmpRec(name, loc);
 			regRE = findRegisteredRE(name);
 		}
-		checkRelationDeclaration(name, "", loc);
+		checkRelationDeclaration(name, loc);
 	}
 	/* We don't have to check declaration well-formedness
 	 * here (this is done when tmp relations are created).
@@ -315,11 +330,12 @@ void ParsingDriver::registerRecDerived(
 						     ->getLabel()
 						     .getRelation(),
 					    rels, extractREs(defs));
-		getModule()->registerLet(LetStatement::create(
-			getQualifiedName(name), std::move(mutRecRE), NoSavedExp::create(),
-			DbgInfo(loc.end.filename, loc.end.line)));
+		getModule()->registerLet(
+			LetStatement::create(getQualifiedName(name), std::move(mutRecRE),
+					     NoSavedExp::create(), toDbgInfo(loc)));
 	}
 	clearTmpRecursive();
+	setRecContext(false);
 }
 
 void ParsingDriver::registerRecViewDerived(
@@ -345,7 +361,8 @@ void ParsingDriver::registerRecViewDerived(
 		auto mutRecRE = MutRecRE::createOpt(rel, rels, extractREs(defs));
 		getModule()->registerLet(LetStatement::create(
 			getQualifiedName(name), std::move(mutRecRE), ViewExp::create(re->clone()),
-			DbgInfo(loc.end.filename, loc.end.line), codeToPrint));
+			toDbgInfo(loc), codeToPrint));
 	}
 	clearTmpRecursive();
+	setRecContext(false);
 }

@@ -17,29 +17,29 @@
  */
 
 #include "Predicate.hpp"
+
 #include <cassert>
 #include <iostream>
 #include <numeric>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 auto operator<<(std::ostream &ostr, const Predicate &p) -> std::ostream &
 {
-	return ostr << p.getID() << (p.isComplement() ? "-1" : "");
-	;
+	return ostr << nameOf(p, nullptr);
 }
 
-auto operator<<(std::ostream &ostr, const PredicateSet &preds) -> std::ostream &
+auto PredicateSet::dump(std::ostream &ostr, const Theory *theory) const -> std::ostream &
 {
 	ostr << "[";
 
-	auto first = true;
-	for (const auto &p : preds) {
-		ostr << (!first ? "&" : "") << p;
-		first = false;
+	std::string_view sep;
+	for (const auto &p : *this) {
+		ostr << sep << nameOf(p, theory);
+		sep = "&";
 	}
 
-	ostr << "]";
-	return ostr;
+	return ostr << "]";
 }

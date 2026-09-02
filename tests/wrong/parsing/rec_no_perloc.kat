@@ -1,0 +1,5 @@
+// No per-location variant for mutually recursive relations
+let rec x = po | x;rf | y;mo
+and y = fr | x;detour | y;[F]
+
+assert x-loc <= po

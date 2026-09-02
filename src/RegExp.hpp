@@ -37,6 +37,9 @@
 class AltRE;
 class Theory;
 
+/* Reports that OP cannot be lowered to an NFA, and terminates */
+[[noreturn]] void reportUnsupportedNFAConversion(const char *op);
+
 class RegExp {
 
 protected:
@@ -95,6 +98,7 @@ public:
 	[[nodiscard]] auto getNumKids() const -> size_t { return kids_.size(); }
 
 	[[nodiscard]] auto isFalse() const -> bool;
+	[[nodiscard]] auto isId() const -> bool;
 
 	[[nodiscard]] auto isPredicate() const -> bool;
 	[[nodiscard]] auto isRelation() const -> bool;
@@ -422,14 +426,12 @@ public:
 
 	[[nodiscard]] auto toNFAFast() const -> NFA override
 	{
-		std::cerr << "[Error] NFA conversion of and(&) expressions is not supported.\n";
-		return {};
+		reportUnsupportedNFAConversion("and(&)");
 	}
 
 	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override
 	{
-		std::cerr << "[Error] NFA conversion of and(&) expressions is not supported."
-			  << std::endl;
+		reportUnsupportedNFAConversion("and(&)");
 	}
 
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
@@ -479,14 +481,12 @@ public:
 
 	[[nodiscard]] auto toNFAFast() const -> NFA override
 	{
-		std::cerr << "[Error] NFA conversion of minus(\\) expressions is not supported.\n";
-		return {};
+		reportUnsupportedNFAConversion("minus(\\)");
 	}
 
 	void expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const override
 	{
-		std::cerr << "[Error] NFA conversion of minus(\\) expressions is not supported."
-			  << std::endl;
+		reportUnsupportedNFAConversion("minus(\\)");
 	}
 
 	[[nodiscard]] auto clone() const -> std::unique_ptr<RegExp> override
@@ -597,7 +597,7 @@ inline void QMarkRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) 
 
 inline void RotRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const
 {
-	std::cerr << "[Error] NFA conversion of rot expressions is not supported.\n";
+	reportUnsupportedNFAConversion("rot");
 }
 
 inline auto PlusRE::toNFAFast() const -> NFA { return std::move(getKid(0)->toNFAFast().plus()); }
@@ -606,11 +606,7 @@ inline auto QMarkRE::toNFAFast() const -> NFA
 {
 	return std::move(getKid(0)->toNFAFast().or_empty());
 }
-inline auto RotRE::toNFAFast() const -> NFA
-{
-	std::cerr << "[Error] NFA conversion of rot expressions is not supported.\n";
-	return {};
-}
+inline auto RotRE::toNFAFast() const -> NFA { reportUnsupportedNFAConversion("rot"); }
 
 /*******************************************************************************
  **                         Mutually recursive REs
@@ -652,19 +648,7 @@ public:
 		return create(rel_, recursive_, std::move(newKids));
 	}
 
-	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
-	{
-		s << "rec@" << rel_.getID() << "[";
-		for (const auto &r : recursive_)
-			s << r.getID() << ",";
-		s << "\b]";
-		for (const auto &re : getKids()) {
-			re->dump(s, theory);
-			s << " & ";
-		}
-		s << "\b\b)";
-		return s;
-	}
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override;
 
 protected:
 	[[nodiscard]] auto isEqual(const RegExp &other) const -> bool override
@@ -712,8 +696,11 @@ auto createOptChildVector(Ts... args) -> std::vector<std::unique_ptr<RegExp>>
 template <typename... Ts> auto AltRE::createOpt(Ts &&...args) -> std::unique_ptr<RegExp>
 {
 	auto r = createOptChildVector<AltRE>(std::forward<Ts>(args)...);
-	std::sort(r.begin(), r.end());
-	r.erase(std::unique(r.begin(), r.end()), r.end());
+	/* Drop duplicate alternatives, keeping the given order: sorting would
+	 * order by address */
+	for (auto it = r.begin(); it != r.end(); ++it)
+		r.erase(std::remove_if(it + 1, r.end(), [&](auto &re) { return *re == **it; }),
+			r.end());
 	return r.size() == 1 ? std::move(*r.begin()) : AltRE::create(std::move(r));
 }
 

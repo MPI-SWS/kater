@@ -90,13 +90,14 @@ public:
 		const TransLabel &other, const std::function<bool(const TransLabel &)> &isValid =
 						 [](auto & /*lab*/) { return true; }) -> bool;
 
-	[[nodiscard]] auto toString() const -> std::string;
+	/** Prints the label as [pre];rel;[post]; resolves names if THEORY is given */
+	auto dump(std::ostream &ostr, const Theory *theory = nullptr) const -> std::ostream &;
 
 	auto operator<=>(const TransLabel &other) const = default;
 
 	friend auto operator<<(std::ostream &s, const TransLabel &t) -> std::ostream &
 	{
-		return s << t.toString();
+		return t.dump(s);
 	}
 
 private:

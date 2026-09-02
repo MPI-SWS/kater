@@ -91,26 +91,33 @@ let psc = [SC] ; po ; hb ; po ; [SC] // sed /po/po-imm/ ?
         | FSC ; hb ; FSC
         | FSC ; hb ; eco ; hb ; FSC
         | SC ; po ; SC
-export acyclic psc unless [SC];any = 0
+export acyclic psc unless [SC];any;[SC] <= id
 
 // ---------------------------------------------------------------------
 // RC11 error detection
 // ---------------------------------------------------------------------
 
-let ww_conflict = [W] ; loc-overlap ; [W]
-let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
-let conflicting = ww_conflict | wr_conflict
-let na_conflict = [NA] ; conflicting | conflicting ; [NA]
+let na_conflict =
+	last_na_reads; [W] |
+	last_na_writes; [R | W] |
+	last_at_reads; [NA & W] |
+	last_at_writes; ([NA & R] | [NA & W])
+
+let ww_conflict =
+	last_at_writes; [W & ATOM]
+
+let last_accesses =
+	last_na_reads | last_na_writes | last_at_reads | last_at_writes
 
 // GenMC needs to handle the no-alloc case (access validity)
 
 export error VE_AccessNonMalloc unless  alloc <= hb
-export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0
+export error VE_DoubleFree      unless  free; [FREE|HPRET] = 0
 
-export error VE_AccessFreed     unless  alloc^-1? ; free ; [FREE] <= hb
-export error VE_AccessFreed     unless  [FREE] ; free^-1 ; alloc = 0
-export error VE_AccessFreed     unless  [NOTHPPROT] ; alloc^-1? ; free ; [HPRET] <= hb
-export error VE_AccessFreed     unless  [HPRET] ; free^-1 ; alloc ; [NOTHPPROT] = 0
+export error VE_AccessFreed     unless  last_accesses; [FREE] <= hb
+export error VE_AccessFreed     unless  free ; [R | W] = 0
+export error VE_AccessFreed     unless  unprotected ; [HPRET] <= hb
+export error VE_AccessFreed     unless  retire ; [NOTHPPROT] = 0 // FIXME: wrong
 
 export error VE_RaceNotAtomic   unless  na_conflict <= hb
 export warning VE_WWRace        unless  ww_conflict <= porf // hb

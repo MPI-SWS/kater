@@ -1,0 +1,3 @@
+include "../../../kat/rc11.kat"
+
+export acyclic eco

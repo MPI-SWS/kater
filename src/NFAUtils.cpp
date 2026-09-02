@@ -20,36 +20,47 @@
 
 #include "Error.hpp"
 #include "NFA.hpp"
+#include "Predicate.hpp"
+#include "Relation.hpp"
 #include "Theory.hpp"
+#include "TransLabel.hpp"
+
+#include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <numeric>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #define DEBUG_TYPE "nfa-utils"
 
-auto calculateReachableFrom(NFA &nfa, const std::vector<NFA::State *> &ss)
-	-> std::unordered_set<NFA::State *>
+auto calculateReachableFrom(NFA &nfa, const std::vector<NFA::State *> &ss) -> std::vector<bool>
 {
-	std::unordered_set<NFA::State *> visited;
+	std::vector<bool> visited(nfa.getNumStates(), false);
 	std::vector<NFA::State *> workList;
 
 	for (auto *s : ss) {
-		visited.insert(s);
+		visited[s->getId()] = true;
 		workList.push_back(s);
 	}
 	while (!workList.empty()) {
 		auto *s = workList.back();
 		workList.pop_back();
-		for (auto it = s->out_begin(); it != s->out_end(); it++) {
-			if (visited.count(it->dest) != 0u) {
+		for (const auto &t : s->outs()) {
+			if (visited[t.dest->getId()]) {
 				continue;
 			}
-			visited.insert(it->dest);
-			workList.push_back(it->dest);
+			visited[t.dest->getId()] = true;
+			workList.push_back(t.dest);
 		}
 	}
 	return visited;
 }
 
-auto calculateReachingTo(NFA &nfa, const std::vector<NFA::State *> &ss)
-	-> std::unordered_set<NFA::State *>
+auto calculateReachingTo(NFA &nfa, const std::vector<NFA::State *> &ss) -> std::vector<bool>
 {
 	nfa.flip();
 	auto visited = calculateReachableFrom(nfa, ss);
@@ -61,13 +72,7 @@ void removeDeadStatesDFS(NFA &nfa)
 {
 	auto useful = calculateReachingTo(nfa, {nfa.accept_begin(), nfa.accept_end()});
 
-	std::set<NFA::State *> toRemove;
-	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
-		if (!useful.count(&*s)) {
-			toRemove.insert(&*s);
-		}
-	});
-	nfa.removeStatesIf([&](NFA::State *s) { return toRemove.contains(s); });
+	nfa.removeStatesIf([&](NFA::State *s) -> bool { return !useful[s->getId()]; });
 
 	if (nfa.getNumStarting() == 0) {
 		nfa.createStarting();
@@ -76,105 +81,217 @@ void removeDeadStatesDFS(NFA &nfa)
 
 void removeDeadStates(NFA &nfa) { applyBidirectionally(removeDeadStatesDFS, nfa); }
 
-auto isSimilarTo(
-	const NFA & /*nfa*/, const NFA::Transition &t1, const NFA::Transition &t2,
-	const std::unordered_map<NFA::State *, std::unordered_map<NFA::State *, bool>> &similar)
-	-> bool
-{
-	return t1.label == t2.label && similar.find(t1.dest)->second.find(t2.dest)->second;
-}
+/* Hashes a label by exactly the fields TransLabel::operator== compares */
+struct TransLabelHasher {
+	auto operator()(const TransLabel &lab) const -> std::size_t
+	{
+		std::size_t hash = 0;
+		if (const auto &rel = lab.getRelation(); rel.has_value()) {
+			hash_combine<Relation::ID>(hash, rel->getID());
+			hash_combine<unsigned>(hash, rel->isInverse() ? 1U : 0U);
+		}
+		/* Predicate sets are sorted, so combining in order is canonical */
+		for (const auto &pred : lab.getPreChecks()) {
+			hash_combine<Predicate::ID>(hash, pred.getID());
+		}
+		for (const auto &pred : lab.getPostChecks()) {
+			hash_combine<Predicate::ID>(hash, pred.getID());
+		}
+		return hash;
+	}
+};
 
-auto hasSimilarTransition(
-	const NFA &nfa, NFA::State *s, const NFA::Transition &t1,
-	const std::unordered_map<NFA::State *, std::unordered_map<NFA::State *, bool>> &similar)
-	-> bool
-{
-	return std::any_of(s->out_begin(), s->out_end(),
-			   [&](auto &t2) { return isSimilarTo(nfa, t1, t2, similar); });
-}
-
-// HERE: Optimize using set iterators + document comparison postcondition
-auto isSimilarTo(
-	const NFA &nfa, NFA::State *s1, NFA::State *s2,
-	const std::unordered_map<NFA::State *, std::unordered_map<NFA::State *, bool>> &similar)
-	-> bool
-{
-	return std::all_of(s1->out_begin(), s1->out_end(), [&](auto &t1) {
-		return s2->hasOutgoing(t1) || hasSimilarTransition(nfa, s2, t1, similar);
-	});
-}
-
-auto findSimilarStates(NFA &nfa)
-	-> std::unordered_map<NFA::State *, std::unordered_map<NFA::State *, bool>>
-{
-	std::unordered_map<NFA::State *, std::unordered_map<NFA::State *, bool>> similar;
-
-	std::unordered_map<NFA::State *, bool> initV;
-	std::generate_n(
-		std::inserter(initV, initV.begin()), nfa.getNumStates(),
-		[sIt = nfa.states_begin()]() mutable { return std::make_pair(&**sIt++, true); });
-	std::generate_n(std::inserter(similar, similar.begin()), nfa.getNumStates(),
-			[sIt = nfa.states_begin(), v = initV]() mutable {
-				return std::make_pair(&**sIt++, v);
-			});
-
-	/* Remove accepting/non-accepting pairs */
-	std::for_each(nfa.accept_begin(), nfa.accept_end(), [&](auto &a) {
-		std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
-			if (!s->isAccepting()) {
-				similar[a][&*s] = false;
+/* An integer view of the transitions, so that the fixpoint never touches a
+ * TransLabel. Distinct labels get distinct numbers */
+struct TransitionIndex {
+	/* Whether every label leaving S also leaves T, i.e. whether T can possibly
+	 * match each of S's transitions */
+	[[nodiscard]] auto labelsSubsume(uint32_t source, uint32_t target) const -> bool
+	{
+		for (auto word = 0U; word < maskWords; word++) {
+			if ((labelMask[(source * maskWords) + word] &
+			     ~labelMask[(target * maskWords) + word]) != 0) {
+				return false;
 			}
+		}
+		return true;
+	}
+
+	/* outs[s] holds the (label, destination) pairs of S's outgoing transitions */
+	std::vector<std::vector<std::pair<uint32_t, uint32_t>>> outs;
+	/* destsByLabel[s][l] holds the states reachable from S via label L */
+	std::vector<std::vector<std::vector<uint32_t>>> destsByLabel;
+	/* labelMask[s] holds the labels S leaves by, spread over maskWords words */
+	unsigned maskWords = 0;
+	std::vector<uint64_t> labelMask;
+};
+
+/* Whether NFA's state IDs are dense, i.e., each state's ID is its index */
+static auto hasDenseStateIDs(const NFA &nfa) -> bool
+{
+	unsigned id = 0;
+	return std::ranges::all_of(nfa.states(),
+				   [&id](auto &s) -> bool { return s->getId() == id++; });
+}
+
+static auto indexTransitions(NFA &nfa) -> TransitionIndex
+{
+	assert(hasDenseStateIDs(nfa) && "state IDs are used as indices below");
+
+	std::unordered_map<TransLabel, uint32_t, TransLabelHasher> labelToId;
+	TransitionIndex index;
+
+	index.outs.resize(nfa.getNumStates());
+	for (auto &s : nfa.states()) {
+		for (const auto &t : s->outs()) {
+			/* Compute the ID first: argument evaluation order is unspecified */
+			const auto nextId = static_cast<uint32_t>(labelToId.size());
+			const auto labelId = labelToId.try_emplace(t.label, nextId).first->second;
+			index.outs[s->getId()].emplace_back(labelId, t.dest->getId());
+		}
+	}
+
+	index.destsByLabel.assign(nfa.getNumStates(),
+				  std::vector<std::vector<uint32_t>>(labelToId.size()));
+	for (auto src = 0U; src < index.outs.size(); src++) {
+		for (auto [label, dest] : index.outs[src]) {
+			index.destsByLabel[src][label].push_back(dest);
+		}
+	}
+
+	static constexpr auto bits = 64U;
+	index.maskWords = static_cast<unsigned>((labelToId.size() + bits - 1) / bits);
+	index.labelMask.assign(nfa.getNumStates() * static_cast<size_t>(index.maskWords), 0);
+	for (auto src = 0U; src < index.outs.size(); src++) {
+		for (auto [label, dest] : index.outs[src]) {
+			index.labelMask[(src * index.maskWords) + (label / bits)] |=
+				UINT64_C(1) << (label % bits);
+		}
+	}
+	return index;
+}
+
+/* Whether every outgoing transition of S1 is matched by an equally-labeled one
+ * of S2 into a similar state */
+static auto isSimilarTo(uint32_t s1, uint32_t s2, const std::vector<uint8_t> &similar,
+			unsigned nrStates, const TransitionIndex &index) -> bool
+{
+	return std::ranges::all_of(index.outs[s1], [&](auto out) -> bool {
+		auto [label, dest] = out;
+		return std::ranges::any_of(index.destsByLabel[s2][label], [&](auto s2Dest) -> bool {
+			return similar[(dest * nrStates) + s2Dest] != 0;
 		});
 	});
+}
+
+auto findSimilarStates(NFA &nfa) -> std::vector<uint8_t>
+{
+	const auto nrStates = static_cast<unsigned>(nfa.getNumStates());
+	std::vector<uint8_t> similar(static_cast<size_t>(nrStates) * nrStates, 1);
+	const auto index = indexTransitions(nfa);
+
+	/* Remove accepting/non-accepting pairs */
+	for (auto &acc : nfa.accepting()) {
+		for (auto &s : nfa.states()) {
+			if (!s->isAccepting()) {
+				similar[(acc->getId() * nrStates) + s->getId()] = 0;
+			}
+		}
+	}
+
+	/* If S2 lacks a label S1 leaves by, it can never match that transition. We
+	 * settle that here instead of letting the fixpoint rediscover it one
+	 * transition at a time, which is where most of its first pass went */
+	for (auto s1 = 0U; s1 < nrStates; s1++) {
+		for (auto s2 = 0U; s2 < nrStates; s2++) {
+			if (!index.labelsSubsume(s1, s2)) {
+				similar[(s1 * nrStates) + s2] = 0;
+			}
+		}
+	}
 
 	bool changed = true;
 	while (changed) {
 		changed = false;
-		std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s1) {
-			std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s2) {
-				if (similar[&*s1][&*s2] && !isSimilarTo(nfa, &*s1, &*s2, similar)) {
-					similar[&*s1][&*s2] = false;
+		for (auto s1 = 0U; s1 < nrStates; s1++) {
+			for (auto s2 = 0U; s2 < nrStates; s2++) {
+				if (similar[(s1 * nrStates) + s2] != 0 &&
+				    !isSimilarTo(s1, s2, similar, nrStates, index)) {
+					similar[(s1 * nrStates) + s2] = 0;
 					changed = true;
 				}
-			});
-		});
+			}
+		}
 	}
 	return similar;
 }
 
 void removeSimilarTransitionsOneDirection(NFA &nfa)
 {
-	auto simMatrix = findSimilarStates(nfa);
+	auto statesNr = static_cast<unsigned>(nfa.getNumStates());
+	std::vector<uint8_t> simMatrix = findSimilarStates(nfa);
 
-	/* Similar states */
-	std::unordered_set<StatePair, StatePairHasher> similar;
-	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s1) {
-		std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s2) {
-			if (&*s1 != &*s2 && simMatrix[&*s1][&*s2] && simMatrix[&*s2][&*s1] &&
-			    !similar.count({&*s2, &*s1})) {
-				similar.insert({&*s1, &*s2});
+	/*
+	 * Similarity is a preorder, so mutual similarity is an equivalence, and
+	 * every class collapses into a single state. Elect the first member of each
+	 * class as its representative: since the relation is transitive, the first
+	 * earlier state mutually similar to S already carries S's representative.
+	 */
+	auto mutuallySimilar = [&](unsigned s1, unsigned s2) -> bool {
+		return simMatrix[(s1 * statesNr) + s2] == 1 && simMatrix[(s2 * statesNr) + s1] == 1;
+	};
+
+	std::vector<unsigned> representative(statesNr);
+	// NOLINTNEXTLINE(modernize-use-ranges): libc++ has no std::ranges::iota
+	std::iota(representative.begin(), representative.end(), 0U);
+	for (auto s2 = 0U; s2 < statesNr; s2++) {
+		for (auto s1 = 0U; s1 < s2; s1++) {
+			if (mutuallySimilar(s1, s2)) {
+				representative[s2] = representative[s1];
+				break;
 			}
-		});
-	});
-	std::for_each(similar.begin(), similar.end(), [&](auto &p) {
-		if (p.second->isStarting()) {
-			nfa.makeStarting(p.first);
 		}
-		nfa.addInvertedTransitions(p.first, p.second->in_begin(), p.second->in_end());
-	});
-	std::unordered_set<NFA::State *> toRemove;
-	for (auto &p : similar)
-		toRemove.insert(p.second);
-	nfa.removeStatesIf([&](NFA::State *s) { return toRemove.contains(s); });
-	// std::for_each(similar.begin(), similar.end(), [&](auto &p){
-	// 	nfa.removeState(p.second);
-	// });
+	}
+
+	/* Merge each non-representative into its representative, once */
+	std::vector<uint8_t> merged(statesNr, 0);
+	for (auto state = 0U; state < statesNr; state++) {
+		if (representative[state] == state) {
+			continue;
+		}
+		auto *rep = nfa[representative[state]];
+		if (nfa[state]->isStarting()) {
+			nfa.makeStarting(rep);
+		}
+		nfa.addInvertedTransitions(rep, nfa[state]->in_begin(), nfa[state]->in_end());
+		merged[state] = 1;
+	}
+
+	/* The removal renumbers the states, so record which old ID each new one
+	 * stands for, and reindex simMatrix once it is done */
+	std::vector<unsigned> oldIDs;
+	for (auto &s : nfa.states()) {
+		if (merged[s->getId()] == 0)
+			oldIDs.push_back(s->getId());
+	}
+	nfa.removeStatesIf([&](NFA::State *s) -> bool { return merged[s->getId()] != 0; });
+
+	const auto leftNr = static_cast<unsigned>(oldIDs.size());
+	VERIFY(nfa.getNumStates() == leftNr, "removal has to preserve the state order");
+	std::vector<uint8_t> simLeft(static_cast<size_t>(leftNr) * leftNr);
+	for (auto s1 = 0U; s1 < leftNr; s1++) {
+		for (auto s2 = 0U; s2 < leftNr; s2++) {
+			simLeft[(s1 * leftNr) + s2] =
+				simMatrix[(oldIDs[s1] * statesNr) + oldIDs[s2]];
+		}
+	}
 
 	/* Transitions to similar states (has to happen after similar removal) */
 	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
 		nfa.removeTransitionsIf(&*s, [&](auto &t1) {
 			return std::any_of(s->out_begin(), s->out_end(), [&](auto &t2) {
-				return t1 != t2 && isSimilarTo(nfa, t1, t2, simMatrix);
+				return t1 != t2 && t1.label == t2.label &&
+				       simLeft[(t1.dest->getId() * leftNr) + t2.dest->getId()];
 			});
 		});
 	});
@@ -184,109 +301,6 @@ void removeSimilarTransitions(NFA &nfa)
 {
 	applyBidirectionally(removeSimilarTransitionsOneDirection, nfa);
 }
-
-// Return the state composition matrix, which is useful for minimizing the
-// states of an NFA.  See Definition 3 of Kameda and Weiner: On the State
-// Minimization of Nondeterministic Finite Automata
-auto get_state_composition_matrix(NFA &nfa) -> std::unordered_map<NFA::State *, std::vector<char>>
-{
-	nfa.flip();
-	auto p = nfa.to_DFA();
-	auto &dfa = p.first;
-	auto &dfaToNfaMap = p.second;
-	nfa.flip();
-
-	std::unordered_map<NFA::State *, std::vector<char>> result;
-
-	// KATER_DEBUG(
-	// 	std::cout << "State composition matrix: " << std::endl;
-	// );
-	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &si) {
-		std::vector<char> row(dfaToNfaMap.size(), 0);
-		auto i = 0U;
-		std::for_each(dfaToNfaMap.begin(), dfaToNfaMap.end(), [&](auto &kv) {
-			if (kv.second.find(&*si) != kv.second.end()) {
-				row[i] = 1;
-			}
-			++i;
-		});
-		result.insert({&*si, row});
-		// KATER_DEBUG(
-		// 	std::cout << row << ": " << si->getId() << std::endl;
-		// );
-	});
-	return result;
-}
-
-static auto is_subset(const std::vector<char> &a, const std::vector<char> &b) -> bool
-{
-	for (int k = 0; k < a.size(); ++k) {
-		if ((a[k] != 0) && (b[k] == 0)) {
-			return false;
-		}
-	}
-	return true;
-}
-
-static void take_union(std::vector<char> &a, const std::vector<char> &b)
-{
-	for (int k = 0; k < a.size(); ++k) {
-		a[k] |= b[k];
-	}
-}
-
-static auto operator<<(std::ostream &ostr, const std::vector<char> &s) -> std::ostream &
-{
-	for (int c : s) {
-		ostr << (c != 0 ? "1" : ".");
-	}
-	return ostr;
-}
-
-// Reduce the NFA using the state composition matrix (cf. Kameda and Weiner)
-void scm_reduce(NFA &nfa)
-{
-	if (nfa.getNumStates() == 0) {
-		return;
-	}
-
-	auto scm = get_state_composition_matrix(nfa);
-	auto dfaSize = scm.begin()->second.size();
-	std::vector<NFA::State *> toRemove;
-	for (auto itI = nfa.states_begin(); itI != nfa.states_end(); /* ! */) {
-		if ((*itI)->isStarting()) {
-			++itI;
-			continue;
-		}
-		/* Is I equal to the union of some other rows? */
-		std::vector<char> newrow(dfaSize, 0);
-		for (auto itJ = nfa.states_begin(); itJ != nfa.states_end(); ++itJ) {
-			if (itI->get() != itJ->get() &&
-			    is_subset(scm[itJ->get()], scm[itI->get()])) {
-				take_union(newrow, scm[itJ->get()]);
-			}
-		}
-		/* If not, skip, otherwise, erase */
-		if (newrow != scm[itI->get()]) {
-			++itI;
-			continue;
-		}
-		KATER_DEBUG(std::cout << "erase node " << (*itI)->getId() << " with";);
-		for (auto itJ = nfa.states_begin(); itJ != nfa.states_end(); ++itJ) {
-			if (itI->get() != itJ->get() &&
-			    is_subset(scm[itJ->get()], scm[itI->get()])) {
-				KATER_DEBUG(std::cout << " " << (*itJ)->getId(););
-				nfa.addInvertedTransitions(itJ->get(), (*itI)->in_begin(),
-							   (*itI)->in_end());
-			}
-		}
-		KATER_DEBUG(std::cout << std::endl;);
-		scm.erase(itI->get());
-		itI = nfa.removeState(itI);
-	}
-}
-
-void scmReduce(NFA &nfa) { applyBidirectionally(scm_reduce, nfa); }
 
 void removeRedundantSelfLoops(NFA &nfa)
 {
@@ -339,10 +353,7 @@ auto joinPredicateEdges(NFA &nfa, const Theory &theory) -> bool
 							    theory.composes(t.label, q.label)) {
 								auto l = t.label;
 								l.merge(q.label);
-								// nfa.addTransition(&*s,
-								// NFA::Transition(l, q.dest));
-								toAdd.emplace_back(
-									NFA::Transition(l, q.dest));
+								toAdd.emplace_back(l, q.dest);
 							}
 						});
 				}
@@ -366,30 +377,21 @@ void compactEdges(NFA &nfa, const Theory &theory)
 	applyBidirectionally(compactFunction, nfa);
 }
 
-auto copy(const NFA &nfa, std::unordered_map<NFA::State *, NFA::State *> *uMap /* = nullptr */)
-	-> NFA
+/** Returns a copy of NFA. The copy of state i is the copy's state i */
+auto copy(const NFA &nfa) -> NFA
 {
 	NFA result;
-	std::unordered_map<NFA::State *, NFA::State *> mapping;
 
-	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s1) {
-		auto *s2 = result.createState();
-		mapping[&*s1] = s2;
-		if (s1->isStarting()) {
-			result.makeStarting(s2);
-		}
-		if (s1->isAccepting()) {
-			result.makeAccepting(s2);
-		}
-	});
-
-	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s1) {
-		std::for_each(s1->out_begin(), s1->out_end(), [&](auto &t) {
-			NFA::addTransition(mapping[&*s1], t.copyTo(mapping[t.dest]));
-		});
-	});
-	if (uMap != nullptr) {
-		*uMap = std::move(mapping);
+	for (const auto &s : nfa.states()) {
+		auto *copied = result.createState();
+		if (s->isStarting())
+			result.makeStarting(copied);
+		if (s->isAccepting())
+			result.makeAccepting(copied);
+	}
+	for (const auto &s : nfa.states()) {
+		for (const auto &t : s->outs())
+			NFA::addTransition(result[s->getId()], t.copyTo(result[t.dest->getId()]));
 	}
 	return result;
 }
@@ -449,8 +451,7 @@ void addTransitivePredicateEdges(NFA &nfa, const Theory &theory)
 				if (theory.composes(outIt->label, outIt2->label)) {
 					auto l = outIt->label;
 					l.merge(outIt2->label);
-					auto trans = NFA::Transition(l, outIt2->dest);
-					toAdd.push_back(trans);
+					toAdd.emplace_back(l, outIt2->dest);
 				}
 				if (outIt->dest->isStarting()) {
 					toCreateStarting.push_back(*outIt2);
@@ -480,9 +481,7 @@ void simplify(NFA &nfa, const Theory &theory)
 	removeDeadStates(nfa);
 	removeSimilarTransitions(nfa);
 	removeDeadStates(nfa);
-	scmReduce(nfa);
 	compactEdges(nfa, theory);
-	scmReduce(nfa);
 	removeDeadStates(nfa);
 	removeSimilarTransitions(nfa);
 	removeDeadStates(nfa);

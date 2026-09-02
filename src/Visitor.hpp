@@ -143,8 +143,7 @@ template <typename... Functions> auto overload(Functions... functions)
 	return lambda(std::move(functions)...);
 }
 
-template <typename... Types> struct type_list {
-};
+template <typename... Types> struct type_list {};
 
 template <typename... Types, typename... Functions>
 auto make_visitor(type_list<Types...> /*unused*/, Functions... funcs)

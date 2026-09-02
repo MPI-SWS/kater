@@ -65,7 +65,9 @@
   ERROR	    "error"
   EXPORT    "export"
   EXTRA     "extra"
-  GENMC     "genmc"
+  GENMC_PRED "genmc_pred"
+  GENMC_SUCC "genmc_succ"
+  GENMC      "genmc"
   ID_REL    "id"
   INCLUDE   "include"
   LET	    "let"
@@ -105,6 +107,7 @@
 %token <std::string> ID;
 %token <std::string> QSTRING;
 %nterm <std::string> qualified_ID;
+%nterm <std::pair<std::string, std::string>> print_rel_ID;
 %nterm <std::string> print_ID;
 %nterm <std::unique_ptr<RegExp>> rel;
 %nterm <std::pair<std::string, std::unique_ptr<RegExp>>> def;
@@ -126,6 +129,7 @@
 
 %printer { yyo << *($$); } <std::unique_ptr<RegExp>>;
 %printer { yyo << *($$); } <std::unique_ptr<Constraint>>;
+%printer { yyo << "<" << ($$).first << ", " << ($$).second; } <std::pair<std::string, std::string>>;
 %printer { yyo << "<" << ($$).first << ", " << *($$).second; } <std::pair<std::string, std::unique_ptr<RegExp>>>;
 %printer { for (auto &s : $$) yyo << s.first << *s.second << " "; } <std::vector<std::pair<std::string, std::unique_ptr<RegExp>>>>;
 %printer { yyo << ($$.has_value() ? *$$ : ""); } <std::optional<std::string>>;
@@ -139,16 +143,16 @@ main:	  %empty		{ }
         ;
 
 decl:     "include" QSTRING                { drv.parse($2.substr(1, $2.size()-2)); }
-	| "relation" ID print_ID           { drv.registerRelation($2, std::move($3), @$); }
+	| "relation" ID print_rel_ID       { drv.registerRelation($2, std::move($3), @$); }
 	| "predicate" ID print_ID          { drv.registerPredicate(std::move($2), std::move($3), @$); }
 	| "disjoint" pred_list             { drv.registerDisjointPreds($2); }
-	| "let" def                        { drv.registerDerived(LetStatement::create(std::move($2.first), std::move($2.second), NoSavedExp::create(), DbgInfo(@$.end.filename, @$.end.line)), @$); }
-	| "let" "rec" def_list             { drv.registerRecDerived(std::move($3), @$);	}
-	| "view" def print_ID		   { drv.registerViewDerived(LetStatement::create(std::move($2.first), $2.second->clone(), ViewExp::create($2.second->clone()), DbgInfo(@$.end.filename, @$.end.line), std::move($3)), @$); }
-	| "view" "rec" def_list	print_ID   { drv.registerRecViewDerived(std::move($3), std::move($4), @$); }
-	| "assume" assume_constraint	   { drv.registerAssume(AssumeStatement::create(std::move($2), false)); }
-	| "assert" assert_constraint	   { drv.registerAssert(AssertStatement::create(std::move($2), DbgInfo(@$.end.filename, @$.end.line))); }
-	| "export" as_extra_opt export_constraint unless_opt print_ID { drv.registerExport(ExportStatement::create(std::move($3), std::move($4), std::move($5), std::move($2)), @$); }
+	| "let" def                        { drv.registerDerived(LetStatement::create(std::move($2.first), std::move($2.second), NoSavedExp::create(), ParsingDriver::toDbgInfo(@$)), @$); }
+	| "let" "rec" { drv.setRecContext(true); } def_list { drv.registerRecDerived(std::move($4), @$);	}
+	| "view" def print_ID		   { drv.registerViewDerived(LetStatement::create(std::move($2.first), $2.second->clone(), ViewExp::create($2.second->clone()), ParsingDriver::toDbgInfo(@$), std::move($3)), @$); }
+	| "view" "rec" { drv.setRecContext(true); } def_list print_ID { drv.registerRecViewDerived(std::move($4), std::move($5), @$); }
+	| "assume" assume_constraint	   { drv.registerAssume(AssumeStatement::create(std::move($2), false, ParsingDriver::toDbgInfo(@$))); }
+	| "assert" assert_constraint	   { drv.registerAssert(AssertStatement::create(std::move($2), ParsingDriver::toDbgInfo(@$))); }
+	| "export" as_extra_opt export_constraint unless_opt print_ID { drv.registerExport(ExportStatement::create(std::move($3), std::move($4), std::move($5), std::move($2), ParsingDriver::toDbgInfo(@$)), @$); }
 	;
 
 def:      ID "=" rel { $$ = std::make_pair(std::move($1), std::move($3)); }
@@ -211,6 +215,10 @@ rel:	  "0"			{ $$ = RegExp::createFalse(); }
 
 qualified_ID: ID        { $$ = $1; }
 	| ID "::" ID    { $$ = $1 + "::" + $3; }
+	;
+
+print_rel_ID: %empty                        { $$ = {}; }
+	| "(" "genmc_pred" ":" QSTRING "," "genmc_succ" ":" QSTRING ")" { $$ = std::make_pair($4.substr(1, $4.size()-2), $8.substr(1, $8.size()-2)); }
 	;
 
 print_ID: %empty                      { $$ = std::string(); }

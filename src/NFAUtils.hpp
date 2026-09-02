@@ -21,6 +21,9 @@
 
 #include "NFA.hpp"
 
+#include <cstdint>
+#include <vector>
+
 class Theory;
 
 template <typename F> void applyBidirectionally(F &&fun, NFA &nfa)
@@ -31,17 +34,21 @@ template <typename F> void applyBidirectionally(F &&fun, NFA &nfa)
 	nfa.flip();
 }
 
-auto calculateReachableFrom(NFA &nfa, const std::vector<NFA::State *> &ss)
-	-> std::unordered_set<NFA::State *>;
+/* Both return a getNumStates()-sized vector, indexed by state ID, with the
+ * entries of the reachable states set */
+/** Returns a flag per state ID, set for the states reachable from SS */
+auto calculateReachableFrom(NFA &nfa, const std::vector<NFA::State *> &ss) -> std::vector<bool>;
 
-auto calculateReachingTo(NFA &nfa, const std::vector<NFA::State *> &ss)
-	-> std::unordered_set<NFA::State *>;
+/** Returns a flag per state ID, set for the states that can reach SS */
+auto calculateReachingTo(NFA &nfa, const std::vector<NFA::State *> &ss) -> std::vector<bool>;
 
 void removeDeadStates(NFA &nfa);
 
 void removeSimilarTransitions(NFA &nfa);
 
-void scmReduce(NFA &nfa);
+/** Returns a states-squared matrix M, indexed by state ID, with M[s1][s2] set
+ * iff S2 simulates S1. Not vector<bool>: the fixpoint indexes it heavily */
+auto findSimilarStates(NFA &nfa) -> std::vector<uint8_t>;
 
 void removeRedundantSelfLoops(NFA &nfa);
 
@@ -53,6 +60,6 @@ void breakToParts(NFA &nfa);
 
 void simplify(NFA &nfa, const Theory &theory);
 
-auto copy(const NFA &nfa, std::unordered_map<NFA::State *, NFA::State *> *uMap = nullptr) -> NFA;
+auto copy(const NFA &nfa) -> NFA;
 
 #endif /* NFA_UTILS_HPP */

@@ -17,14 +17,8 @@
  */
 
 #include "Relation.hpp"
-#include "Predicate.hpp"
-
-auto Relation::getName() const -> std::string
-{
-	return "$" + std::to_string(getID()) + (isInverse() ? "-1" : "");
-}
 
 auto operator<<(std::ostream &ostr, const Relation &r) -> std::ostream &
 {
-	return ostr << r.getName();
+	return ostr << nameOf(r, nullptr);
 }

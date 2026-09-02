@@ -20,16 +20,26 @@
 
 #include "AdjList.hpp"
 #include "Config.hpp"
+#include "Error.hpp"
 #include "GenMCPrinter.hpp"
+#include "Logger.hpp"
 #include "NFAUtils.hpp"
 #include "RegExpUtils.hpp"
+#include "Relation.hpp"
 #include "Saturation.hpp"
+#include "SavedExp.hpp"
+#include "Statement.hpp"
 #include "Utils.hpp"
+#include "VSet.hpp"
 #include "Visitor.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <execution>
+#include <iostream>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -311,25 +321,28 @@ NFA createCompilationNFA(const CompSchemeRHS &rhs, const Theory &theory)
 	return lNFA;
 }
 
-void expandSubsetAssumption(NFA &rhs, const SubsetConstraint *assm, const KatModule &module)
+/* Saturates RHS with ASSM; returns whether the assumption was of a supported shape */
+static auto expandSubsetAssumption(NFA &rhs, const SubsetConstraint *assm, const KatModule &module)
+	-> bool
 {
 	auto &theory = module.getTheory();
 	auto *lRE = assm->getLHS();
 	auto *rRE = assm->getRHS();
 
-	auto lNFA = lRE->toNFA();
+	/* If `any` is used in the assumption, realize it as `any*` */
+	auto lNFA = starifyAny(lRE->clone())->toNFA();
 	normalize(lNFA, theory);
 
 	/* Handle `A <= 0` assumption */
 	if (rRE->isFalse()) {
 		saturateEmpty(rhs, std::move(lNFA));
-		return;
+		return true;
 	}
 
 	/* Handle `A <= id` assumption */
 	if (*rRE == *RegExp::createId()) {
 		saturateID(rhs, std::move(lNFA));
-		return;
+		return true;
 	}
 
 	/* Transform `A ; A <= A` to `transitive A` */
@@ -338,38 +351,51 @@ void expandSubsetAssumption(NFA &rhs, const SubsetConstraint *assm, const KatMod
 	    dynamic_cast<const CharRE *>(rRE)) {
 		auto rel = *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation();
 		saturateTransitive(rhs, rel);
-		return;
+		return true;
 	}
 	/* Transform `A+ <= A` to `transitive A` */
 	auto *plusRE = dynamic_cast<const PlusRE *>(&*lRE);
 	if (plusRE && *rRE == *plusRE->getKid(0) && dynamic_cast<const CharRE *>(rRE)) {
 		auto rel = *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation();
 		saturateTransitive(rhs, rel);
-		return;
+		return true;
 	}
 
 	// FIXME: Also discard A <= A{*,+}
 	/* Discard `A <= A?` assumption */
 	auto *charRE = dynamic_cast<const CharRE *>(&*lRE);
 	if (charRE && dynamic_cast<const QMarkRE *>(&*rRE) && *rRE->getKid(0) == *charRE) {
-		return;
+		return true;
 	}
 	/* Handle `A <= builtin` assumption */
 	auto *charRHS = dynamic_cast<const CharRE *>(&*rRE);
 	if (charRHS) {
 		saturateBuiltin(rhs, *dynamic_cast<const CharRE *>(rRE)->getLabel().getRelation(),
 				std::move(lNFA), theory);
-		return;
+		return true;
 	}
 	/* Handle `[A];po;[B] <= [A];po;[C];po;[B]` assumption */
 	auto [supported, compRHS] = isSupportedCompScheme(assm, module.getRegisteredRE("po"));
 	if (supported) {
 		saturateEmpty(rhs, createCompilationNFA(compRHS, theory));
-		return;
+		return true;
 	}
 
-	std::cerr << "[Warning] Ignoring unsupported assumption " << *assm << "\n";
-	return;
+	return false;
+}
+
+/* Built-in assumptions become unsupported only once optimizeModuleForExport()
+ * rewrites the builtins underneath them, so they are debug-only noise */
+static void warnUnsupportedAssumption(const AssumeStatement *assm, const Theory &theory)
+{
+	const auto msg =
+		"ignoring unsupported assumption " + toString(*assm->getConstraint(), theory);
+	if (!assm->getDbgInfo().has_value()) {
+		// NOLINTNEXTLINE(cppcoreguidelines-avoid-do-while): macro
+		KATER_DEBUG(LOG(VerbosityLevel::Note) << "built-in: " << msg;);
+		return;
+	}
+	LOG_ONCE_AT(msg, VerbosityLevel::Warning, assm->getDbgInfo()) << msg;
 }
 
 void expandAssumption(NFA &rhs, const AssumeStatement *assm, const KatModule &module)
@@ -378,8 +404,12 @@ void expandAssumption(NFA &rhs, const AssumeStatement *assm, const KatModule &mo
 
 	auto *cst = assm->getConstraint();
 	if (const auto *cc = dynamic_cast<const EqualityConstraint *>(cst)) {
-		expandSubsetAssumption(rhs, cc, module);
-		expandSubsetAssumption(rhs, cc, module);
+		auto invC = SubsetConstraint::create(cc->getRHS()->clone(), cc->getLHS()->clone(),
+						     cc->sameEnds(), cc->rotated());
+		auto fwd = expandSubsetAssumption(rhs, cc, module);
+		auto bwd = expandSubsetAssumption(rhs, &*invC, module);
+		if (!fwd || !bwd)
+			warnUnsupportedAssumption(assm, module.getTheory());
 		return;
 	}
 	if (const auto *tc = dynamic_cast<const TotalityConstraint *>(cst)) {
@@ -389,11 +419,11 @@ void expandAssumption(NFA &rhs, const AssumeStatement *assm, const KatModule &mo
 	}
 	// FIXME: What about SubsetSameEnds???
 	if (const auto *ec = dynamic_cast<const SubsetConstraint *>(cst)) {
-		expandSubsetAssumption(rhs, ec, module);
+		if (!expandSubsetAssumption(rhs, ec, module))
+			warnUnsupportedAssumption(assm, module.getTheory());
 		return;
 	}
-	std::cerr << "Ignoring unsupported local assumption " << *assm << "\n";
-	return;
+	warnUnsupportedAssumption(assm, module.getTheory());
 }
 
 /*************************************************************
@@ -406,7 +436,8 @@ void completeCounterexample(const NFA &nfa, NFA::State *s, Counterexample &cex)
 		return;
 
 	std::deque<std::pair<NFA::State *, Counterexample>> worklist(1, {s, cex});
-	std::unordered_set<NFA::State *> visited({s});
+	std::vector<uint8_t> visited(nfa.getNumStates(), 0);
+	visited[s->getId()] = 1;
 
 	while (!worklist.empty()) {
 		auto [s, c] = worklist.front();
@@ -418,81 +449,122 @@ void completeCounterexample(const NFA &nfa, NFA::State *s, Counterexample &cex)
 		}
 
 		for (auto it = s->out_begin(); it != s->out_end(); ++it) {
-			auto nc(c);
-			nc.extend(it->label);
+			auto nextCex(cex);
+			nextCex.extend(it->label);
 
-			if (visited.contains(it->dest))
+			if (visited[it->dest->getId()] != 0)
 				continue;
 
-			visited.insert(it->dest);
-			worklist.emplace_back(it->dest, nc);
+			visited[it->dest->getId()] = 1;
+			worklist.emplace_back(it->dest, nextCex);
 		}
 	}
 }
 
-void Kater::printCounterexample(const Counterexample &cex) const
+static auto cexNote(const Counterexample &cex, const Theory &theory) -> std::string
 {
-	std::cerr << "Counterexample: ";
-	if (cex.empty()) {
-		std::cerr << "ε\n";
-		return;
-	}
-
-	auto i = 0U;
-	std::for_each(cex.begin(), cex.end(), [&](auto &lab) {
-		if (lab.isRelation()) {
-			std::cerr << getModule().getTheory().getName(*lab.getRelation());
-		} else {
-			assert(lab.isPredicate());
-			auto first = true;
-			std::cerr << "[";
-			for (auto &p : lab.getPreChecks()) {
-				if (!first)
-					std::cerr << "&";
-				std::cerr << getModule().getTheory().getName(p);
-				first = false;
-			}
-			std::cerr << "]";
-		}
-		std::cerr << " ";
-		if (cex.getType() == Counterexample::Type::TUT && i++ == cex.getMismatch()) {
-			std::cerr << "===> ";
-		}
-	});
-	if (cex.getType() == Counterexample::Type::ANA) {
-		std::cerr << "(A/NA)";
-	}
-	std::cerr << "\n";
+	return "\n  counterexample: " + toString(cex, theory);
 }
 
-VSet<Predicate> collectNegatedOutgoing(const VSet<NFA::State *> &states)
+/* The negated pre-checks on each state's outgoing transitions, indexed by state ID */
+static auto collectNegatedOutgoing(const NFA &nfa) -> std::vector<VSet<Predicate>>
 {
-	VSet<Predicate> result;
+	std::vector<VSet<Predicate>> negated(nfa.getNumStates());
 
-	for (auto &s : states) {
+	for (const auto &s : nfa.states()) {
 		for (auto &t : s->outs()) {
 			auto negIt = std::ranges::find_if(
 				t.label.getPreChecks(), [&](auto &p) { return p.isComplement(); });
 			if (negIt != t.label.getPreChecks().end())
-				result.insert(*negIt);
+				negated[s->getId()].insert(*negIt);
 		}
 	}
-	return result;
+	return negated;
 }
 
-VSet<NFA::State *> getNextRHS(const TransLabel &label, const VSet<NFA::State *> &states,
-			      const Theory &theory)
+static auto collectNegatedOutgoing(const VSet<unsigned> &states,
+				   const std::vector<VSet<Predicate>> &negated) -> VSet<Predicate>
 {
-	VSet<NFA::State *> result;
+	VSet<Predicate> result;
 
-	for (auto &s : states) {
-		for (auto &ot : s->outs() | std::views::filter([&](auto &ot) {
-					return theory.isIncludedIn(label, ot.label);
-				}))
-			result.insert(ot.dest);
-	}
+	for (auto id : states)
+		result.insert(negated[id]);
 	return result;
 }
+
+/*
+ * The right-hand automaton, arranged for the inclusion check: its distinct
+ * labels, and each state's transitions as (label index, destination ID).
+ *
+ * next() used to ask the theory whether the left-hand label includes the label
+ * of every transition it crossed. An automaton has tens of distinct labels and
+ * the search crosses millions of transitions, so we ask once per pair of labels
+ * instead and remember the answer.
+ */
+class RHSIndex {
+
+public:
+	RHSIndex(const NFA &nfa, const Theory &theory)
+		: theory(&theory), outs(nfa.getNumStates()), accepting(nfa.getNumStates())
+	{
+		for (const auto &s : nfa.states())
+			for (const auto &t : s->outs())
+				labels.insert(t.label);
+		for (const auto &s : nfa.states()) {
+			accepting[s->getId()] = static_cast<uint8_t>(s->isAccepting());
+			for (const auto &t : s->outs())
+				outs[s->getId()].emplace_back(indexOf(t.label), t.dest->getId());
+		}
+	}
+
+	/* The states STATES can move to by a transition whose label LABEL includes */
+	auto next(const TransLabel &label, const VSet<unsigned> &states) const -> VSet<unsigned>
+	{
+		const auto &included = includedLabels(label);
+		std::vector<unsigned> result;
+
+		for (auto id : states)
+			for (auto [index, dest] : outs[id])
+				if (included[index] != 0)
+					result.push_back(dest);
+		std::ranges::sort(result);
+		result.erase(std::ranges::unique(result).begin(), result.end());
+		return {std::move(result)};
+	}
+
+	[[nodiscard]] auto anyAccepting(const VSet<unsigned> &states) const -> bool
+	{
+		return std::ranges::any_of(states,
+					   [&](auto id) -> bool { return accepting[id] != 0; });
+	}
+
+private:
+	auto indexOf(const TransLabel &label) const -> unsigned
+	{
+		return static_cast<unsigned>(std::ranges::lower_bound(labels, label) -
+					     labels.begin());
+	}
+
+	/* Which of the automaton's labels LABEL includes, indexed as above */
+	auto includedLabels(const TransLabel &label) const -> const std::vector<uint8_t> &
+	{
+		auto it = included.find(label);
+		if (it != included.end())
+			return it->second;
+
+		std::vector<uint8_t> answers(labels.size());
+		for (auto i = 0U; i < labels.size(); i++)
+			answers[i] = static_cast<uint8_t>(
+				theory->isIncludedIn(label, labels[static_cast<int>(i)]));
+		return included.emplace(label, std::move(answers)).first->second;
+	}
+
+	const Theory *theory;
+	VSet<TransLabel> labels;
+	std::vector<std::vector<std::pair<unsigned, unsigned>>> outs;
+	std::vector<uint8_t> accepting;
+	mutable std::map<TransLabel, std::vector<uint8_t>> included;
+};
 
 std::vector<TransLabel> maybeSplitToComplements(const TransLabel &label,
 						const VSet<Predicate> &negated,
@@ -526,8 +598,7 @@ class SimState {
 
 public:
 	SimState() = delete;
-	SimState(NFA::State *lhs, VSet<NFA::State *> rhs) : lhs(lhs), rhs(std::move(rhs)) {}
-	SimState(NFA::State *lhs, VSet<NFA::State *> &&rhs) : lhs(lhs), rhs(std::move(rhs)) {}
+	SimState(NFA::State *lhs, VSet<unsigned> rhs) : lhs(lhs), rhs(std::move(rhs)) {}
 
 	SimState(const SimState &) = default;
 	SimState(SimState &&) = default;
@@ -535,34 +606,85 @@ public:
 	auto operator=(const SimState &) -> SimState & = default;
 	auto operator=(SimState &&) -> SimState & = default;
 
-	auto getLHS() const -> NFA::State * { return lhs; }
-	auto getRHS() const -> const VSet<NFA::State *> & { return rhs; }
+	[[nodiscard]] auto getLHS() const -> NFA::State * { return lhs; }
+	[[nodiscard]] auto getRHS() const -> const VSet<unsigned> & { return rhs; }
 
-	auto isLHSAccepting() const -> bool { return lhs->isAccepting(); }
-	auto isRHSAccepting() const -> bool
-	{
-		return std::any_of(rhs.begin(), rhs.end(),
-				   [&](auto *s) { return s->isAccepting(); });
-	}
-
-	auto operator<=>(const SimState &other) const -> bool = default;
+	[[nodiscard]] auto isLHSAccepting() const -> bool { return lhs->isAccepting(); }
 
 private:
 	NFA::State *lhs;
-	VSet<NFA::State *> rhs;
+	VSet<unsigned> rhs;
 };
 
-// XXX: FIXME
-struct SimStateHasher {
-	auto operator()(const SimState &p) const -> std::size_t
+/*
+ * The simulation on the left-hand automaton: simulates(s, p) holds when s
+ * accepts everything p does. relatedTo(p) lists the states the simulation puts
+ * p in either relation with, so that an antichain insertion for p can visit
+ * their buckets and no others.
+ */
+class Simulation {
+
+public:
+	Simulation(NFA &nfa)
+		: nrStates(nfa.getNumStates()), similar(findSimilarStates(nfa)), related(nrStates)
 	{
-		std::size_t hash = 0;
-		hash_combine<unsigned>(hash, p.getLHS()->getId());
-		std::for_each(p.getRHS().begin(), p.getRHS().end(),
-			      [&](auto *s2) { hash_combine<unsigned>(hash, s2->getId()); });
-		return hash;
+		for (auto pid = 0U; pid < nrStates; pid++)
+			for (auto sid = 0U; sid < nrStates; sid++)
+				if (simulates(sid, pid) || simulates(pid, sid))
+					related[pid].push_back(sid);
 	}
+
+	/* Whether SIMULATOR accepts everything SIMULATED does */
+	[[nodiscard]] auto simulates(unsigned simulator, unsigned simulated) const -> bool
+	{
+		return similar[(static_cast<size_t>(simulated) * nrStates) + simulator] != 0;
+	}
+
+	[[nodiscard]] auto relatedTo(unsigned pid) const -> const std::vector<unsigned> &
+	{
+		return related[pid];
+	}
+
+private:
+	unsigned nrStates;
+	std::vector<uint8_t> similar;
+	std::vector<std::vector<unsigned>> related;
 };
+
+/*
+ * Antichain insertion for simulation-based language inclusion.
+ *
+ * Attempts to insert (p, P) into the antichain, which contains (s, Q):
+ *   - if s simulates p and Q ⊆ P: insertion is skipped.
+ *   - if p simulates s and P ⊆ Q: (s, Q) is pruned.
+ *
+ * Returns true if the pair was inserted, false if it was subsumed.
+ *
+ * See: Abdulla et al., "When Simulations Meet Antichains", Optimization V2.
+ */
+static auto antichainInsert(const SimState &state,
+			    std::vector<std::vector<VSet<unsigned>>> &visited,
+			    const Simulation &sim) -> bool
+{
+	const auto pid = state.getLHS()->getId();
+
+	for (auto sid : sim.relatedTo(pid)) {
+		const auto subsumes = sim.simulates(sid, pid);
+		const auto subsumed = sim.simulates(pid, sid);
+		auto &entries = visited[sid];
+
+		for (auto it = entries.begin(); it != entries.end();) {
+			if (subsumes && it->subsetOf(state.getRHS()))
+				return false;
+			if (subsumed && state.getRHS().subsetOf(*it))
+				it = entries.erase(it);
+			else
+				++it;
+		}
+	}
+	visited[pid].push_back(state.getRHS());
+	return true;
+}
 
 auto Kater::isDFASubLanguageOfNFA(NFA &nfa, const NFA &other) const -> InclusionResult
 {
@@ -571,56 +693,62 @@ auto Kater::isDFASubLanguageOfNFA(NFA &nfa, const NFA &other) const -> Inclusion
 
 	if (other.getNumStarting() == 0) {
 		Counterexample cex;
-		return {nfa.acceptsNoString(cex), cex};
+		return {.result = nfa.acceptsNoString(cex), .cex = cex};
 	}
 
-	std::unordered_set<SimState, SimStateHasher> visited;
+	auto negatedOf = collectNegatedOutgoing(other);
+	const RHSIndex rhs(other, getModule().getTheory());
+	const Simulation sim(nfa);
+	/* The antichain, bucketed by the ID of the left-hand state it belongs to */
+	std::vector<std::vector<VSet<unsigned>>> visited(nfa.getNumStates());
 	std::deque<std::pair<SimState, Counterexample>> workList;
 
+	std::vector<unsigned> startIDs;
+	std::for_each(other.start_begin(), other.start_end(),
+		      [&](auto *s) -> void { startIDs.push_back(s->getId()); });
+	std::ranges::sort(startIDs);
+	VSet<unsigned> start(std::move(startIDs));
+
 	std::for_each(nfa.start_begin(), nfa.start_end(), [&](auto *s1) {
-		VSet<NFA::State *> ss(other.start_begin(), other.start_end());
-		visited.insert({s1, ss});
-		workList.push_back({{s1, ss}, Counterexample()});
+		visited[s1->getId()].push_back(start);
+		workList.push_back({{s1, start}, Counterexample()});
 	});
 	while (!workList.empty()) {
-		auto [state, c] = workList.front();
+		auto [state, cex] = std::move(workList.front());
 		workList.pop_front();
 
-		if (state.isLHSAccepting() && !state.isRHSAccepting()) {
-			c.setType(Counterexample::Type::ANA);
-			return {false, c};
+		if (state.isLHSAccepting() && !rhs.anyAccepting(state.getRHS())) {
+			cex.setType(Counterexample::Type::ANA);
+			return {.result = false, .cex = cex};
 		}
 
-		auto negated = collectNegatedOutgoing(state.getRHS());
+		auto negated = collectNegatedOutgoing(state.getRHS(), negatedOf);
 		for (auto &t : state.getLHS()->outs()) {
 
-			auto nc(c);
-			nc.extend(t.label);
+			auto nextCex(cex);
+			nextCex.extend(t.label);
 
 			auto labels =
 				maybeSplitToComplements(t.label, negated, getModule().getTheory());
 			for (auto &l : labels) {
-				auto nextLHS = t.dest;
-				auto nextRHS =
-					getNextRHS(l, state.getRHS(), getModule().getTheory());
+				auto nextRHS = rhs.next(l, state.getRHS());
 
 				/* If no matching step has been found, report a counterexample */
-				SimState next = {nextLHS, nextRHS};
 				if (nextRHS.empty()) {
-					nc.setType(Counterexample::Type::TUT);
-					completeCounterexample(nfa, next.getLHS(), nc);
-					return {false, nc};
+					nextCex.setType(Counterexample::Type::TUT);
+					completeCounterexample(nfa, t.dest, nextCex);
+					return {.result = false, .cex = nextCex};
 				}
-				/* Proceed if the pair has not been examined */
 
-				if (visited.count(next) != 0U)
+				/* Proceed if the state (or a similar one) has not been examined */
+				SimState next = {t.dest, std::move(nextRHS)};
+				if (!antichainInsert(next, visited, sim))
 					continue;
-				visited.insert(next);
-				workList.push_back({next, nc});
+				workList.emplace_back(std::move(next), nextCex);
 			}
 		}
 	}
-	return {true, {}};
+	return {.result = true, .cex = {}};
 }
 
 auto Kater::checkInclusion(SubsetConstraint &subsetC) const -> InclusionResult
@@ -664,7 +792,7 @@ auto Kater::checkInclusion(SubsetConstraint &subsetC) const -> InclusionResult
 auto Kater::checkAssertion(Constraint &cst) -> InclusionResult
 {
 	if (getConf().verbose >= 2) {
-		std::cout << "Checking assertion " << cst << std::endl;
+		std::cerr << "Checking assertion " << WithTheory(cst, getTheory()) << "\n";
 	}
 
 	InclusionResult result;
@@ -705,28 +833,29 @@ auto Kater::checkAssertions() -> bool
 #endif
 	};
 
-	/* Go ahead and check */
-	std::vector<std::pair<DbgInfo, Counterexample>> errors;
-	auto status = true;
+	/* The parallel region only writes its own slot */
+	auto asserts = module->asserts();
+	std::vector<std::optional<Counterexample>> cexs(asserts.size());
 	maybe_parallelize([&](auto policy) {
-		auto asserts = module->asserts();
-		std::for_each(
+		std::transform(
 #ifdef __cpp_lib_execution
 			policy,
 #endif
-			asserts.begin(), asserts.end(), [&](auto &assert) {
+			asserts.begin(), asserts.end(), cexs.begin(),
+			[&](auto &assert) -> std::optional<Counterexample> {
 				auto [ok, cex] = checkAssertion(*assert->getConstraint());
-				if (!ok) {
-					status = false;
-					errors.push_back({assert->getDbgInfo(), cex});
-				}
+				return ok ? std::nullopt : std::optional(cex);
 			});
 	});
 
-	/* Print all counterexamples */
-	for (const auto &err : errors) {
-		std::cerr << err.first << ": [Error] Assertion does not hold.\n";
-		printCounterexample(err.second);
+	/* Print all counterexamples in declaration order */
+	auto status = true;
+	for (auto i = 0U; i < cexs.size(); i++) {
+		if (!cexs[i].has_value())
+			continue;
+		LOG_AT(VerbosityLevel::Error, asserts[i]->getDbgInfo())
+			<< "assertion does not hold" << cexNote(*cexs[i], getTheory());
+		status = false;
 	}
 	return status;
 }
@@ -823,25 +952,28 @@ auto containsMandatoryRegistrations(const KatModule &module) -> bool
 {
 	auto ppo = module.getPPODeclaration();
 	if (!ppo) {
-		std::cerr << "[Error] No top-level ppo definition provided\n";
+		LOG(VerbosityLevel::Error) << "no top-level 'ppo' definition provided";
 		return false;
 	}
 	auto hb = module.getHBDeclaration();
 	if (!hb) {
-		std::cerr << "[Error] No top-level hb definition provided\n";
+		LOG(VerbosityLevel::Error) << "no top-level 'hb' definition provided";
 		return false;
 	}
 	if (!dynamic_cast<const ViewExp *>(hb->getSaved())) {
-		std::cerr << "[Error] hb needs to be stored in a view\n";
+		LOG_AT(VerbosityLevel::Error, hb->getDbgInfo())
+			<< "'hb' must be stored in a view\n"
+			   "  note: declare it as \"view hb = ...\" instead of \"let hb = ...\"";
 		return false;
 	}
 	auto coh = module.getCOHDeclaration();
 	if (!coh) {
-		std::cerr << "[Error] No coherence constraint provided\n";
+		LOG(VerbosityLevel::Error) << "no coherence constraint provided";
 		return false;
 	}
 	if (!dynamic_cast<const ViewExp *>(coh->getSaved())) {
-		std::cerr << "[Error] Coherence constraint needs to take a view argument\n";
+		LOG_AT(VerbosityLevel::Error, coh->getDbgInfo())
+			<< "coherence constraint must take a view argument";
 		return false;
 	}
 	return true;
@@ -916,6 +1048,65 @@ auto Kater::isPPOIntersectionInPPO(const AcyclicConstraint *acyc) const -> Inclu
 	return isDFASubLanguageOfNFA(lhs, nfa2);
 }
 
+/**
+ * Ensure that all saved relations are included in pporf and are transitive.
+ * For mutually recursive relations: Check that some possible export order exists */
+auto Kater::checkSavedRelsExportRequirements(const RegExp &pporf) -> bool
+{
+	auto status = true;
+	auto &module = getModule();
+	const auto *ppo = module.getPPODeclaration()->getRE();
+	for (auto &let : module.lets()) {
+		if (dynamic_cast<const NoSavedExp *>(let->getSaved()) != nullptr)
+			continue;
+
+		const auto *view = dynamic_cast<const ViewExp *>(let->getSaved());
+		const auto *mutRec = dynamic_cast<const MutRecRE *>(let->getRE());
+
+		auto require = [&](std::unique_ptr<Constraint> cst, const char *what) -> bool {
+			auto result = checkAssertion(*cst);
+			if (result.result)
+				return true;
+			LOG_AT(VerbosityLevel::Error, let->getDbgInfo())
+				<< what << ": " << WithTheory(*let->getRE(), getTheory())
+				<< cexNote(result.cex, getTheory());
+			return false;
+		};
+
+		if (view == nullptr)
+			status &= require(SubsetConstraint::create(let->getRE()->clone(),
+								   StarRE::createOpt(pporf.clone()),
+								   false, false),
+					  "saved relation not included in pporf");
+		else
+			status &= require(
+				SubsetConstraint::create(
+					let->getRE()->clone(),
+					AltRE::createOpt(StarRE::createOpt(module.createPORF()),
+							 RegExp::createId()),
+					false, false),
+				"view not included in porf | id");
+
+		// FIXME: prefix should be the reduced RE if we ever allow custom reductions
+		status &= require(SubsetConstraint::createOpt(
+					  SeqRE::createOpt(ppo->clone(), let->getRE()->clone()),
+					  let->getRE()->clone(), false, false),
+				  "reduced relation not transitive");
+
+		/* For mutually recursive views, check that we can export them in some order
+		 */
+		if (view != nullptr && mutRec != nullptr) {
+			if (!constructRecCallGraph(mutRec).transClosure().isIrreflexive()) {
+				LOG_AT(VerbosityLevel::Error, let->getDbgInfo())
+					<< "could not resolve view calculation order: "
+					<< WithTheory(*let->getRE(), getTheory());
+				status = false;
+			}
+		}
+	}
+	return status;
+}
+
 auto Kater::checkExportRequirements() -> bool
 {
 	auto &module = getModule();
@@ -941,18 +1132,19 @@ auto Kater::checkExportRequirements() -> bool
 		pporf->clone(), StarRE::createOpt(std::move(acycDisj)), false, false);
 	auto [status, cex] = checkAssertion(*noOOTA);
 	if (!status) {
-		std::cerr << "[Warning] Acyclicity constraints do not preclude OOTA.\n";
-		std::cerr << "OOTA needs to be enforced by the model checker\n";
-		printCounterexample(cex);
+		LOG(VerbosityLevel::Warning)
+			<< "acyclicity constraints do not preclude OOTA" << note
+			<< "OOTA has to be enforced by the model checker"
+			<< cexNote(cex, getTheory());
 		status = true; /* treat as a soft error */
 	}
 
 	/* Check extensibility */
 	for (auto *ac : acycsView) {
 		if (auto [ok, cex] = isPPOIntersectionInPPO(ac); !ok) {
-			std::cerr << "[Error] acyclic constraint /\\ ar is not included in ppo: "
-				  << *ac << "\n";
-			printCounterexample(cex);
+			LOG(VerbosityLevel::Error)
+				<< "acyclic constraint /\\ ar is not included in ppo: "
+				<< WithTheory(*ac, getTheory()) << cexNote(cex, getTheory());
 			status = false;
 		}
 	}
@@ -979,87 +1171,26 @@ auto Kater::checkExportRequirements() -> bool
 								  ac->getRE()->clone());
 			});
 
-		/* it must be: A_R => A (assuming the unless holds) */
+		/* A <= A_R | id; the id case is sound only if A is irreflexive */
 		module.getTheory().registerAssume(
 			AssumeStatement::create(stmt->getUnless()->clone(), true));
-		auto unlessOK = SubsetConstraint::create(std::move(acycDisj),
-							 std::move(acycDisjRest), false, false);
-		auto [status, cex] = checkAssertion(*unlessOK);
-		if (!status) {
-			std::cerr << "[Error] \"unless\" clause does not imply acyclicity "
-				     "constraint: "
-				  << *currentCst << "\n";
-			printCounterexample(cex);
+		auto unlessOK = SubsetConstraint::create(
+			std::move(acycDisj),
+			AltRE::createOpt(std::move(acycDisjRest), RegExp::createId()), false,
+			false);
+		auto [unlessStatus, cex] = checkAssertion(*unlessOK);
+		if (!unlessStatus) {
+			LOG_AT(VerbosityLevel::Error, stmt->getDbgInfo())
+				<< "\"unless\" clause does not imply acyclicity constraint: "
+				<< WithTheory(*currentCst, getTheory())
+				<< cexNote(cex, getTheory());
 			status = false;
 		}
 		module.getTheory().clearTempAssumes();
 	}
 
-	/* Ensure that all saved relations are included in pporf and are transitive */
-	auto *ppo = module.getPPODeclaration()->getRE();
-	for (auto &let : module.lets()) {
-		if (dynamic_cast<const NoSavedExp *>(let->getSaved()))
-			continue;
-
-		Counterexample cex;
-		if (!dynamic_cast<const ViewExp *>(let->getSaved())) {
-			auto savedInPO = SubsetConstraint::create(let->getRE()->clone(),
-								  StarRE::createOpt(pporf->clone()),
-								  false, false);
-			auto result = checkAssertion(*savedInPO);
-			if (!result.result) {
-				std::cerr << "[Error] Saved relation not included in pporf: "
-					  << *let->getRE() << "\n";
-				printCounterexample(result.cex);
-				status = false;
-			}
-		} else {
-			auto savedInPO = SubsetConstraint::create(
-				let->getRE()->clone(),
-				AltRE::createOpt(StarRE::createOpt(module.createPORF()),
-						 RegExp::createId()),
-				false, false);
-			auto result = checkAssertion(*savedInPO);
-			if (!result.result) {
-				std::cerr << "[Error] View not included in porf | id: "
-					  << *let->getRE() << "\n";
-				printCounterexample(result.cex);
-				status = false;
-			}
-		}
-
-		if (!dynamic_cast<const NoSavedExp *>(let->getSaved())) {
-			cex.clear();
-			// FIXME: If we ever allow customly-reduced relations, prefix needs to be
-			// changed auto prefix = (sv.status == VarStatus::Reduce) ? sv.red->clone()
-			// 					       : ppo->clone();
-			auto prefix = ppo->clone();
-			auto seqExp = SeqRE::createOpt(std::move(prefix), let->getRE()->clone());
-			auto savedTrans = SubsetConstraint::createOpt(
-				std::move(seqExp), let->getRE()->clone(), false, false);
-			auto result = checkAssertion(*savedTrans);
-			if (!result.result) {
-				std::cerr << "[Error] Reduced relation not transitive: "
-					  << *let->getRE() << "\n";
-				printCounterexample(result.cex);
-				status = false;
-			}
-		}
-
-		/* For mutually recursive views, check that we can export them in some order
-		 */
-		if (dynamic_cast<const ViewExp *>(let->getSaved()) &&
-		    dynamic_cast<const MutRecRE *>(let->getRE())) {
-			if (!constructRecCallGraph(dynamic_cast<const MutRecRE *>(let->getRE()))
-				     .transClosure()
-				     .isIrreflexive()) {
-				std::cerr << "[Error] Could not resolve view calculation "
-					     "order: "
-					  << *let->getRE() << "\n";
-				status = false;
-			}
-		}
-	}
+	if (!checkSavedRelsExportRequirements(*pporf))
+		status = false;
 	return status;
 }
 
@@ -1072,7 +1203,7 @@ template <typename F> void foreachTrailingTransBuiltin(std::unique_ptr<RegExp> &
 	/* If r ~ A | B or r ~ A? or r ~ A* or r ~ r;A, recurse to kids */
 	auto *qmarkRE = dynamic_cast<const QMarkRE *>(&*reUP);
 	auto *altRE = dynamic_cast<const AltRE *>(&*reUP);
-	auto *starRE = dynamic_cast<const AltRE *>(&*reUP);
+	auto *starRE = dynamic_cast<const StarRE *>(&*reUP);
 	auto *mutRecRE = dynamic_cast<const MutRecRE *>(&*reUP);
 	if (qmarkRE || altRE || starRE || mutRecRE) {
 		for (auto &kRE : reUP->kids())
@@ -1152,6 +1283,18 @@ auto collectTrailingTransBuiltins(Relation rel, std::unique_ptr<RegExp> &re)
 	return result;
 }
 
+static void warnNonIncrementalView(const LetStatement &let, const RegExp *builtin,
+				   const Theory &theory)
+{
+	auto reason = builtin != nullptr ? "it is not closed under " + toString(*builtin, theory)
+					 : std::string("it does not end in a transitive relation");
+	LOG_AT(VerbosityLevel::Warning, let.getDbgInfo())
+		<< "view '" << let.getName() << "' cannot be computed incrementally: " << reason
+		<< note
+		<< "the generated checker will walk the whole chain for every event, which is "
+		   "quadratic in the thread length";
+}
+
 void Kater::optimizeModuleForExport()
 {
 	auto &module = getModule();
@@ -1190,15 +1333,19 @@ void Kater::optimizeModuleForExport()
 		}
 
 		auto rel = Relation::createUser();
+		theory.registerRelation(
+			rel, RelationInfo{.name = let->getName(), .dbg = let->getDbgInfo()});
 		auto newViewRE =
 			SeqRE::createOpt(QMarkRE::createOpt(CharRE::create(TransLabel(rel))),
 					 plusRE->getKid(0)->clone());
 		std::vector<std::unique_ptr<RegExp>> defs;
 		defs.emplace_back(newViewRE->clone());
 		auto newRE = MutRecRE::createOpt(rel, {rel}, std::move(defs));
-		std::cerr << "[Warning] Transforming transitive expression ";
-		let->getRE()->dump(std::cerr, &theory);
-		std::cerr << " to " << *newRE << "\n";
+		LOG_AT(VerbosityLevel::Note, let->getDbgInfo())
+			<< "rewriting transitive view '" << let->getName()
+			<< "' as a recursive definition" << note
+			<< "before: " << WithTheory(*let->getRE(), theory) << note
+			<< "after:  " << WithTheory(*newRE, theory);
 
 		auto oldRE = plusRE->clone(); // copy so that it doesn't get replaced in place
 		module.replaceAllUsesWith(&*oldRE, &*newRE);
@@ -1231,7 +1378,19 @@ void Kater::optimizeModuleForExport()
 	module.replaceAllUsesWith(&*oldFr, &*newFr);
 	module.replaceAllUsesWith(&*oldRmw, &*newRmw);
 
-	/* Try and de-transitivize transitive primitives */
+	makeViewsIncremental();
+}
+
+/*
+ * Rewrites each recursive view to step along an immediate relation where it is
+ * closed under it, so that the generated calculation does not re-walk the whole
+ * transitive chain for every event.
+ */
+void Kater::makeViewsIncremental()
+{
+	auto &module = getModule();
+	auto &theory = module.getTheory();
+
 	for (auto &let : module.lets()) {
 		auto *mutRecRE = dynamic_cast<MutRecRE *>(let->getRE());
 		auto *viewExp = dynamic_cast<ViewExp *>(let->getSaved());
@@ -1240,7 +1399,7 @@ void Kater::optimizeModuleForExport()
 		}
 
 		/* Helper function to check if a relation is closed w.r.t. some builtin */
-		auto isRecREClosedWRTBuiltin = [&](auto &builtinRE) {
+		auto isRecREClosedWRTBuiltin = [&](const auto &builtinRE) -> bool {
 			auto recBuiltin = SeqRE::createOpt(mutRecRE->clone(), builtinRE->clone());
 			auto recBuiltinInRec = SubsetConstraint::create(
 				std::move(recBuiltin), mutRecRE->clone(), false, false);
@@ -1249,18 +1408,26 @@ void Kater::optimizeModuleForExport()
 
 		/* Get the respective recursive def */
 		std::vector<std::pair<std::unique_ptr<RegExp>, std::unique_ptr<RegExp>>> toRepl;
-		for (auto &builtinRE :
-		     collectTrailingTransBuiltins(mutRecRE->getRelation(), viewExp->getRERef()) |
-			     std::views::filter(isRecREClosedWRTBuiltin)) {
-			std::cerr << "[Warning] Replacing " << *builtinRE
-				  << "+ with its immediate counterpart in " << let->getName()
-				  << " = " << *viewExp->getRE() << "\n";
+		auto builtins =
+			collectTrailingTransBuiltins(mutRecRE->getRelation(), viewExp->getRERef());
+		if (builtins.empty())
+			warnNonIncrementalView(*let, nullptr, theory);
+		for (const auto &builtinRE : builtins) {
+			if (!isRecREClosedWRTBuiltin(builtinRE)) {
+				warnNonIncrementalView(*let, &*builtinRE, theory);
+				continue;
+			}
 			auto newRE = viewExp->getRE()->clone();
 			auto toReplaceRE = PlusRE::create(builtinRE->clone());
 			foreachTrailingTransBuiltin(newRE, [&](std::unique_ptr<RegExp> &builtin) {
 				replaceREWith(builtin, &*toReplaceRE, &*builtinRE);
 			});
-			std::cerr << "Result: " << *newRE << "\n";
+			const auto name = toString(*builtinRE, theory);
+			LOG_AT(VerbosityLevel::Note, let->getDbgInfo())
+				<< "computing '" << let->getName() << "' along " << name
+				<< " instead of its transitive " << name << "+" << note
+				<< "before: " << WithTheory(*viewExp->getRE(), theory) << note
+				<< "after:  " << WithTheory(*newRE, theory);
 
 			toRepl.emplace_back(viewExp->getRE()->clone(), std::move(newRE));
 		}
@@ -1278,6 +1445,5 @@ auto Kater::exportCode() -> bool
 	optimizeModuleForExport();
 
 	GenMCPrinter p(getModule(), getConf());
-	p.output();
-	return true;
+	return p.output();
 }

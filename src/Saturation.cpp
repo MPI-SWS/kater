@@ -52,12 +52,12 @@ void duplicateStatesForInitPreds(NFA &nfa)
 
 	NFA result;
 	for (const auto &p : preds) {
-		std::unordered_map<NFA::State *, NFA::State *> m;
-		auto nfac = copy(nfa, &m);
+		auto nfac = copy(nfa);
 
 		for (auto *s : nfa.starting()) {
-			nfac.removeTransitionsIf(
-				m[s], [&](auto &t) { return t.label.getPreChecks() != p; });
+			nfac.removeTransitionsIf(nfac[s->getId()], [&](auto &t) -> bool {
+				return t.label.getPreChecks() != p;
+			});
 			nfa.removeTransitionsIf(
 				s, [&](auto &t) { return t.label.getPreChecks() == p; });
 		}
@@ -98,7 +98,7 @@ void saturateInitFinalPreds(NFA &nfa, const Theory &theory)
 			auto reaching = calculateReachingTo(nfa, {tIt->dest});
 			std::for_each(ipreds.begin(), ipreds.end(), [&](auto &ip) {
 				auto t = *tIt;
-				if (reaching.contains(ip.dest) &&
+				if (reaching[ip.dest->getId()] &&
 				    theory.composes(t.label, ip.label)) {
 					t.label.merge(ip.label);
 					toAdd.push_back(t);
@@ -158,14 +158,16 @@ void saturateID(NFA &nfa, NFA &&id)
 		      [&](auto &s) { states.push_back(&*s); });
 
 	std::for_each(states.begin(), states.end(), [&](auto *s) {
-		std::unordered_map<NFA::State *, NFA::State *> m;
-		auto c = copy(id, &m);
+		/* alt() appends the copy's states, so state i of ID ends up at OFFSET+i */
+		const auto offset = nfa.getNumStates();
+		nfa.alt(copy(id));
 
-		nfa.alt(std::move(c));
-		std::for_each(inits.begin(), inits.end(),
-			      [&](auto *i) { nfa.addEpsilonTransitionSucc(s, m[i]); });
-		std::for_each(fnals.begin(), fnals.end(),
-			      [&](auto *f) { nfa.addEpsilonTransitionSucc(m[f], s); });
+		for (auto *init : inits)
+			nfa.addEpsilonTransitionSucc(
+				s, nfa[static_cast<unsigned>(offset) + init->getId()]);
+		for (auto *fnal : fnals)
+			nfa.addEpsilonTransitionSucc(
+				nfa[static_cast<unsigned>(offset) + fnal->getId()], s);
 	});
 }
 
@@ -198,20 +200,21 @@ void saturateTransitive(NFA &nfa, const Relation &rel)
  */
 void addNFAPath(NFA &nfa, const NFA &path, NFA::State *src, NFA::State *dst)
 {
-	std::unordered_map<NFA::State *, NFA::State *> m;
 	VSet<NFA::State *> inits(path.start_begin(), path.start_end());
 	VSet<NFA::State *> finals(path.accept_begin(), path.accept_end());
 
-	auto lcopy = copy(path, &m);
-
+	auto lcopy = copy(path);
 	lcopy.clearAllAccepting();
 	lcopy.clearAllStarting();
 
+	/* alt() appends the copy's states, so state i of PATH ends up at OFFSET+i */
+	const auto offset = nfa.getNumStates();
 	nfa.alt(std::move(lcopy));
-	for (auto *i : inits)
-		nfa.addEpsilonTransition(src, m[i]);
-	for (auto *f : finals)
-		nfa.addEpsilonTransition(m[f], dst);
+
+	for (auto *init : inits)
+		nfa.addEpsilonTransition(src, nfa[static_cast<unsigned>(offset) + init->getId()]);
+	for (auto *fnal : finals)
+		nfa.addEpsilonTransition(nfa[static_cast<unsigned>(offset) + fnal->getId()], dst);
 }
 
 void saturateBuiltin(NFA &nfa, const Relation &rel, NFA sat, const Theory &theory)
@@ -317,17 +320,14 @@ void saturateRotate(NFA &nfa, const Theory &theory)
 	auto isNonStarting = [](auto &s) { return !s->isStarting(); };
 	for (auto &s : nfa.states() | std::views::filter(isNonStarting)) {
 
-		std::unordered_map<NFA::State *, NFA::State *> m1;
-		std::unordered_map<NFA::State *, NFA::State *> m2;
-
-		auto rot1 = copy(nfa, &m1);
-		auto rot2 = copy(nfa, &m2);
+		auto rot1 = copy(nfa);
+		auto rot2 = copy(nfa);
 
 		rot1.clearAllStarting();
-		rot1.makeStarting(m1[&*s]);
+		rot1.makeStarting(rot1[s->getId()]);
 
 		rot2.clearAllAccepting();
-		rot2.makeAccepting(m2[&*s]);
+		rot2.makeAccepting(rot2[s->getId()]);
 
 		rot1.seq(std::move(rot2));
 		result.alt(std::move(rot1));

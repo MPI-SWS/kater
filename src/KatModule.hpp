@@ -59,14 +59,16 @@ public:
 	auto getTheory() const -> const Theory & { return theory_; }
 	auto getTheory() -> Theory & { return theory_; }
 
-	void registerRelation(Relation r, RelationInfo info)
+	void registerRelation(Relation r, RelationInfo info, bool perLoc = true)
 	{
 		auto &theory = getTheory();
 		registerLet(LetStatement::create(info.name, CharRE::create(TransLabel(r)),
 						 NoSavedExp::create(), info.dbg));
 		theory.registerRelation(r, info);
 
-		if (!r.isUser() || info.locInfo == RelLocInfo::KeepsLoc)
+		/* Per-location variants are minted only for genuine "relation"
+		 * declarations; derived relations (incl. recursive ones) have none */
+		if (!perLoc || !r.isUser() || info.locInfo == RelLocInfo::KeepsLoc)
 			return;
 
 		auto perlocName = info.name + "-loc";
@@ -120,7 +122,7 @@ public:
 	void registerCOH(LetStatement *coh) { coh_ = coh; }
 
 	// Handle consistency constraint in the input file
-	void registerExport(std::unique_ptr<ExportStatement> stmt, const yy::location &loc);
+	void registerExport(std::unique_ptr<ExportStatement> stmt);
 
 	auto getRegisteredRE(const std::string &name) const -> const RegExp *
 	{

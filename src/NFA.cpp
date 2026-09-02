@@ -19,9 +19,18 @@
 #include "NFA.hpp"
 #include "Config.hpp"
 #include "Error.hpp"
+#include "StatePair.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <ranges>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #define DEBUG_TYPE "nfa"
 
@@ -34,7 +43,8 @@ NFA::NFA(const TransLabel &c) : NFA()
 
 auto NFA::flip() -> NFA &
 {
-	std::for_each(states_begin(), states_end(), [](auto &s) { s->flip(); });
+	for (auto &s : states())
+		s->flip();
 	std::swap(getStarting(), getAccepting());
 	return *this;
 }
@@ -49,14 +59,14 @@ auto NFA::acceptsEmptyString() const -> bool
 
 auto NFA::acceptsNoString(Counterexample &cex) const -> bool
 {
-	std::unordered_set<State *> visited;
+	std::vector<uint8_t> visited(getNumStates(), 0);
 	std::vector<std::pair<State *, Counterexample>> workList;
 
 	for (auto it = states_begin(); it != states_end(); it++) {
 		if (!(*it)->isStarting()) {
 			continue;
 		}
-		visited.insert(it->get());
+		visited[(*it)->getId()] = 1;
 		workList.emplace_back(it->get(), Counterexample());
 	}
 	while (!workList.empty()) {
@@ -68,10 +78,10 @@ auto NFA::acceptsNoString(Counterexample &cex) const -> bool
 		}
 
 		for (auto it = s->out_begin(); it != s->out_end(); it++) {
-			if (visited.count(it->dest) != 0u) {
+			if (visited[it->dest->getId()] != 0) {
 				continue;
 			}
-			visited.insert(it->dest);
+			visited[it->dest->getId()] = 1;
 
 			auto nc(c);
 			nc.extend(it->label);
@@ -88,16 +98,22 @@ auto NFA::alt(NFA &&other) -> NFA &
 			     other.getStarting().end());
 	getAccepting().insert(getAccepting().end(), other.getAccepting().begin(),
 			      other.getAccepting().end());
+	compressStateIDs();
 	return *this;
 }
 
 auto NFA::seq(NFA &&other) -> NFA &
 {
+	/* Merge the states first: the transitions added below are ordered by ID */
+	auto thisAccepting = getAccepting();
+	auto otherStarting = other.getStarting();
+	std::move(other.states_begin(), other.states_end(), std::back_inserter(nfa));
+	compressStateIDs();
+
 	/* Add transitions `this->accepting --> other.starting.outgoing` */
-	std::for_each(accept_begin(), accept_end(), [&](auto &a) {
-		std::for_each(other.start_begin(), other.start_end(),
-			      [&](auto &s) { addTransitions(a, s->out_begin(), s->out_end()); });
-	});
+	for (auto *acc : thisAccepting)
+		for (auto *start : otherStarting)
+			addTransitions(acc, start->out_begin(), start->out_end());
 
 	/* Clear accepting states if necessary */
 	if (!other.acceptsEmptyString()) {
@@ -107,8 +123,7 @@ auto NFA::seq(NFA &&other) -> NFA &
 	/* Clear starting states of `other` */
 	other.clearAllStarting();
 
-	/* Move the states of the `other` NFA into our NFA and append accepting states */
-	std::move(other.states_begin(), other.states_end(), std::back_inserter(nfa));
+	/* Append `other`'s accepting states */
 	getAccepting().insert(getAccepting().end(), other.getAccepting().begin(),
 			      other.getAccepting().end());
 	return *this;
@@ -117,10 +132,9 @@ auto NFA::seq(NFA &&other) -> NFA &
 auto NFA::plus() -> NFA &
 {
 	/* Add transitions `accepting --> starting` */
-	std::for_each(accept_begin(), accept_end(), [&](auto &a) {
-		std::for_each(start_begin(), start_end(),
-			      [&](auto &s) { addEpsilonTransitionSucc(a, s); });
-	});
+	for (auto *acc : accepting())
+		for (auto *start : starting())
+			addEpsilonTransitionSucc(acc, start);
 	return *this;
 }
 
@@ -155,10 +169,10 @@ auto NFA::star() -> NFA &
 	 * starting/accepting states */
 	auto *i = createState();
 
-	std::for_each(exStarting.begin(), exStarting.end(),
-		      [&](auto *es) { addEpsilonTransitionSucc(i, es); });
-	std::for_each(exAccepting.begin(), exAccepting.end(),
-		      [&](auto *ea) { addEpsilonTransitionPred(ea, i); });
+	for (auto *es : exStarting)
+		addEpsilonTransitionSucc(i, es);
+	for (auto *acc : exAccepting)
+		addEpsilonTransitionPred(acc, i);
 
 	makeStarting(i);
 	makeAccepting(i);
@@ -166,85 +180,90 @@ auto NFA::star() -> NFA &
 	return *this;
 }
 
+/*
+ * Gives a subset its unique representation. We do not use VSet here: we collect
+ * the whole subset first and sort once, where VSet would insert one ID at a time.
+ */
+static void canonicalize(std::vector<unsigned> &ids)
+{
+	std::ranges::sort(ids);
+	ids.erase(std::ranges::unique(ids).begin(), ids.end());
+}
+
 // Convert to a deterministic automaton using the subset construction
-auto NFA::to_DFA() const -> std::pair<NFA, std::map<NFA::State *, std::set<NFA::State *>>>
+auto NFA::to_DFA() const -> std::pair<NFA, std::vector<std::vector<unsigned>>>
 {
+	/* Subsets are canonical, so equal ones hash alike */
+	struct SubsetHasher {
+		auto operator()(const std::vector<unsigned> &ids) const -> std::size_t
+		{
+			std::size_t hash = 0;
+			for (auto id : ids) {
+				hash_combine<unsigned>(hash, id);
+			}
+			return hash;
+		}
+	};
+
 	NFA dfa;
-	std::map<std::set<State *>, State *> nfaToDfaMap; // m
-	std::map<State *, std::set<State *>> dfaToNfaMap; // v
+	/* We name a subset by its sorted state IDs: comparing those beats comparing
+	 * sets of pointers. We index dfaToNfa by DFA state ID, as the DFA numbers its
+	 * states as it creates them and never removes one */
+	std::unordered_map<std::vector<unsigned>, State *, SubsetHasher> nfaToDfaMap;
+	std::vector<std::vector<unsigned>> dfaToNfa;
 
-	auto *s = dfa.createStarting();
-	auto ss = std::set<State *>(start_begin(), start_end());
-	nfaToDfaMap.insert({ss, s});
-	dfaToNfaMap.insert({s, ss});
+	std::vector<unsigned> ss;
+	for (auto *s : starting()) {
+		ss.push_back(s->getId());
+	}
+	canonicalize(ss);
 
-	std::vector<std::set<State *>> worklist = {ss};
+	auto *start = dfa.createStarting();
+	nfaToDfaMap.emplace(ss, dfa[start->getId()]);
+	dfaToNfa.push_back(ss);
+
+	std::vector<std::vector<unsigned>> worklist = {std::move(ss)};
 	while (!worklist.empty()) {
-		auto sc = worklist.back();
+		auto sc = std::move(worklist.back());
 		worklist.pop_back();
+		auto *ds = nfaToDfaMap[sc];
 
-		// XXX: FIXME
-		std::for_each(sc.begin(), sc.end(), [&](State *ns) {
-			std::for_each(ns->out_begin(), ns->out_end(), [&](const Transition &t) {
-				std::set<State *> next;
-				std::for_each(sc.begin(), sc.end(), [&](State *ns2) {
-					std::for_each(ns2->out_begin(), ns2->out_end(),
-						      [&](const Transition &t2) {
-							      if (t2.label == t.label) {
-								      next.insert(t2.dest);
-							      }
-						      });
-				});
-				auto it = nfaToDfaMap.find(next);
-				State *ds = nullptr;
-				if (it != nfaToDfaMap.end()) {
-					ds = it->second;
-				} else {
-					ds = dfa.createState();
-					nfaToDfaMap.insert({next, ds});
-					dfaToNfaMap.insert({ds, next});
-					worklist.push_back(std::move(next));
-				}
-				NFA::addTransition(nfaToDfaMap[sc], Transition(t.label, ds));
-			});
-		});
+		/* Bucket the subset's outgoing transitions by label, so that each
+		 * successor subset is built once instead of once per transition
+		 * carrying that label */
+		std::map<TransLabel, std::vector<unsigned>> successors;
+		for (auto id : sc) {
+			for (const auto &t : (*this)[id]->outs()) {
+				successors[t.label].push_back(t.dest->getId());
+			}
+		}
+
+		for (auto &[label, next] : successors) {
+			canonicalize(next);
+			auto it = nfaToDfaMap.find(next);
+			State *nextDfa = nullptr;
+			if (it != nfaToDfaMap.end()) {
+				nextDfa = it->second;
+			} else {
+				nextDfa = dfa.createState();
+				VERIFY(nextDfa->getId() == dfaToNfa.size(),
+				       "subsets are addressed by DFA state ID");
+				nfaToDfaMap.emplace(next, nextDfa);
+				dfaToNfa.push_back(next);
+				worklist.push_back(std::move(next));
+			}
+			NFA::addTransition(ds, Transition(label, nextDfa));
+		}
 	}
 
-	std::for_each(dfaToNfaMap.begin(), dfaToNfaMap.end(), [&](auto &kv) {
-		if (std::any_of(kv.second.begin(), kv.second.end(),
-				[&](State *s) { return s->isAccepting(); })) {
-			dfa.makeAccepting(kv.first);
+	for (auto &s : dfa.states()) {
+		if (std::ranges::any_of(dfaToNfa[s->getId()], [&](unsigned id) -> bool {
+			    return (*this)[id]->isAccepting();
+		    })) {
+			dfa.makeAccepting(&*s);
 		}
-	});
-	return std::make_pair(std::move(dfa), std::move(dfaToNfaMap));
-}
-
-template <typename T> auto operator<<(std::ostream &ostr, const std::set<T> &s) -> std::ostream &
-{
-	bool not_first = false;
-	for (auto i : s) {
-		if (not_first) {
-			ostr << ", ";
-		} else {
-			not_first = true;
-		}
-		ostr << i;
 	}
-	return ostr;
-}
-
-template <> auto operator<<(std::ostream &ostr, const std::set<NFA::State *> &s) -> std::ostream &
-{
-	bool not_first = false;
-	for (auto *i : s) {
-		if (not_first) {
-			ostr << ", ";
-		} else {
-			not_first = true;
-		}
-		ostr << i->getId();
-	}
-	return ostr;
+	return std::make_pair(std::move(dfa), std::move(dfaToNfa));
 }
 
 auto operator<<(std::ostream &ostr, const NFA &nfa) -> std::ostream &

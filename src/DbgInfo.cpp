@@ -22,5 +22,14 @@
 
 auto operator<<(std::ostream &ostr, const DbgInfo &dbg) -> std::ostream &
 {
-	return ostr << dbg.filename << ":" << dbg.line;
+	/* Mirrors bison's location format: f:l, f:l.c, f:l.c1-c2, f:l1.c1-l2.c2 */
+	ostr << dbg.filename << ":" << dbg.line;
+	if (dbg.column == 0)
+		return ostr;
+	ostr << "." << dbg.column;
+	if (dbg.endLine == dbg.line && dbg.endColumn > dbg.column)
+		ostr << "-" << dbg.endColumn;
+	else if (dbg.endLine > dbg.line)
+		ostr << "-" << dbg.endLine << "." << dbg.endColumn;
+	return ostr;
 }

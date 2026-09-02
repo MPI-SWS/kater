@@ -24,11 +24,34 @@
 
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 class Theory;
 
-auto prettyPrint(std::ostream &str, const TransLabel &lab, const Theory &theory) -> std::ostream &;
+/*
+ * Stream manipulator resolving names via THEORY, so that a diagnostic stays a
+ * single expression: os << WithTheory(*assm, theory)
+ */
+template <typename T> struct WithTheory {
+	WithTheory(const T &obj, const Theory &theory) : obj(&obj), theory(&theory) {}
+
+	const T *obj;
+	const Theory *theory;
+
+	friend auto operator<<(std::ostream &s, const WithTheory &wt) -> std::ostream &
+	{
+		return wt.obj->dump(s, wt.theory);
+	}
+};
+
+/* Renders OBJ with its names resolved, for callers that need a string */
+template <typename T> auto toString(const T &obj, const Theory &theory) -> std::string
+{
+	std::ostringstream str;
+	str << WithTheory(obj, theory);
+	return str.str();
+}
 
 auto openFileForWriting(const std::string &filename) -> std::ofstream;
 

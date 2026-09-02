@@ -18,8 +18,20 @@
 
 #include "Counterexample.hpp"
 
-auto operator<<(std::ostream &s, const Counterexample &c) -> std::ostream &
+#include <ostream>
+
+auto Counterexample::dump(std::ostream &ostr, const Theory *theory) const -> std::ostream &
 {
-	std::for_each(c.begin(), c.end(), [&](auto &lab) { s << lab << " "; });
-	return s;
+	if (empty())
+		return ostr << "ε";
+
+	auto idx = 0U;
+	for (const auto &lab : *this) {
+		lab.dump(ostr, theory) << " ";
+		if (getType() == Type::TUT && idx++ == getMismatch())
+			ostr << "===> ";
+	}
+	if (getType() == Type::ANA)
+		ostr << "(A/NA)";
+	return ostr;
 }

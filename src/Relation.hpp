@@ -26,6 +26,8 @@
 #include <string>
 #include <unordered_map>
 
+class Theory;
+
 /*******************************************************************************
  **                           RelationInfo Class
  ******************************************************************************/
@@ -62,11 +64,18 @@ public:
 		/*** CAUTION: Dummy IDs (e.g., PerLocBegin) should not be a part of the builtin map
 		 */
 
-		/* same thread */
+		/* same thread, same instruction */
 		same_thread,
+		si,
 		/* same location */
+		last_na_reads,
+		last_na_writes,
+		last_at_reads,
+		last_at_writes,
+		unprotected,
 		alloc,
-		frees,
+		free,
+		retire,
 		loc_overlap,
 		/* tc, tj */
 		tc,
@@ -134,8 +143,6 @@ public:
 	/* Whether this relation is inversed */
 	[[nodiscard]] constexpr auto isInverse() const -> bool { return inverse; }
 
-	[[nodiscard]] auto getName() const -> std::string;
-
 	auto operator<=>(const Relation &) const = default;
 	friend auto operator<<(std::ostream &ostr, const Relation &r) -> std::ostream &;
 
@@ -156,5 +163,8 @@ struct RelationHasher {
 		return std::hash<Relation::ID>()(r.getID());
 	}
 };
+
+/* Renders REL via THEORY, or as a debug token if THEORY does not know it */
+auto nameOf(const Relation &rel, const Theory *theory) -> std::string;
 
 #endif /* KATER_RELATION_HPP */

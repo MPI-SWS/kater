@@ -36,7 +36,7 @@ struct StatePairHasher {
 	{
 		std::size_t hash = 0;
 		hash_combine<unsigned>(hash, p.first->getId());
-		hash_combine<unsigned>(hash, p.first->getId());
+		hash_combine<unsigned>(hash, p.second->getId());
 		return hash;
 	}
 };

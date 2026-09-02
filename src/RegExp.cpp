@@ -17,11 +17,23 @@
  */
 
 #include "RegExp.hpp"
+#include "Error.hpp"
+#include "Logger.hpp"
+#include "Relation.hpp"
 #include "Saturation.hpp"
 #include "Theory.hpp"
 #include "Utils.hpp"
 
+#include <cstdlib>
+#include <string_view>
+
 using namespace std::literals;
+
+void reportUnsupportedNFAConversion(const char *op)
+{
+	LOG(VerbosityLevel::Error) << "NFA conversion of " << op << " expressions is not supported";
+	exit(ECHECK); // NOLINT(concurrency-mt-unsafe): the model cannot be lowered at all
+}
 
 auto RegExp::createFalse() -> std::unique_ptr<RegExp> { return AltRE::create(); }
 
@@ -41,6 +53,12 @@ auto RegExp::createSym(std::unique_ptr<RegExp> re) -> std::unique_ptr<RegExp>
 auto RegExp::isFalse() const -> bool
 {
 	return getNumKids() == 0 && (dynamic_cast<const AltRE *>(this) != nullptr);
+}
+
+auto RegExp::isId() const -> bool
+{
+	const auto *charRE = dynamic_cast<const CharRE *>(this);
+	return charRE != nullptr && charRE->getLabel().isTruePredicate();
 }
 
 auto RegExp::getDomain() const -> std::unique_ptr<RegExp>
@@ -200,8 +218,18 @@ void MutRecRE::expandOnNFA(NFA &nfa, StatePair p, RecStatesMap recStates) const
 
 auto CharRE::dump(std::ostream &s, const Theory *theory) const -> std::ostream &
 {
-	auto &label = getLabel();
-	if (!theory)
-		return s << label;
-	return prettyPrint(s, label, *theory);
+	return getLabel().dump(s, theory);
+}
+
+auto MutRecRE::dump(std::ostream &s, const Theory *theory) const -> std::ostream &
+{
+	/* Mirrors the surface syntax: rec X where X = ... and Y = ... */
+	s << "rec " << nameOf(rel_, theory) << " where ";
+	std::string_view sep;
+	for (auto i = 0U; i < getNumKids(); i++) {
+		s << sep << nameOf(recursive_[i], theory) << " = ";
+		getKid(i)->dump(s, theory);
+		sep = " and ";
+	}
+	return s;
 }

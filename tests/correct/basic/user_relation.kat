@@ -1,3 +1,3 @@
-relation x
+relation x (genmc_pred: "rel_pred", genmc_succ: "string") // genmc part optional
 
 let y = x | po

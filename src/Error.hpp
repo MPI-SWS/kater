@@ -49,4 +49,16 @@ void addDebugType(const char *);
 
 #define KATER_DEBUG(X) DEBUG_WITH_TYPE(DEBUG_TYPE, X)
 
+/** An assertion that stays on in release builds; see doc/development.md */
+namespace kater::detail {
+[[noreturn]] void reportInternalError(const char *what, const char *file, unsigned line);
+} // namespace kater::detail
+
+#define VERIFY(condition, ...)                                                                     \
+	(static_cast<bool>(condition)                                                              \
+		 ? void(0)                                                                         \
+		 : kater::detail::reportInternalError(                                             \
+			   "internal check failed: " #condition __VA_OPT__(": " __VA_ARGS__),      \
+			   __FILE__, __LINE__))
+
 #endif /* KATER_ERROR_HPP */

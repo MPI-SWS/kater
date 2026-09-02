@@ -1,9 +1,11 @@
 let ppo = po
-let sc = (ppo | rf | mo | fr | tc | tj | lin)
+let sc = (po | rf | mo | fr | tc | tj | lin)
 
 view porf = (po | rf | tc | tj | lin)+
-view hb = porf
-view hbRelinche = (po | rf;[NPLK] | tc | tj | lin)+ (genmc: "if (!getConf()->collectLinSpec && !getConf()->checkLinSpec) lab->addView({}); else")
+view hb = (po | [ATOM];rf;[ATOM] | tc | tj | lin)+
+
+view hbRelinche = (po | [ATOM];rf;[NPLK&ATOM] | tc | tj | lin)+
+     (genmc: "if (!getConf()->collectLinSpec && !getConf()->checkLinSpec) lab->addView({}); else")
 
 export coherence hb
 
@@ -13,18 +15,27 @@ export acyclic sc
 // SC error detection
 // ---------------------------------------------------------------------
 
-let ww_conflict = [W] ; loc-overlap ; [W]
-let wr_conflict = [W] ; loc-overlap ; [R] | [R] ; loc-overlap ; [W]
-let conflicting = ww_conflict | wr_conflict
-let na_conflict = [NA] ; conflicting | conflicting ; [NA]
+let na_conflict =
+	last_na_reads; [W] |
+	last_na_writes; [R | W] |
+	last_at_reads; [NA & W] |
+	last_at_writes; ([NA & R] | [NA & W])
+
+let ww_conflict =
+	last_at_writes; [W & ATOM]
+
+let last_accesses =
+	last_na_reads | last_na_writes | last_at_reads | last_at_writes
+
+// GenMC needs to handle the no-alloc case (access validity)
 
 export error VE_AccessNonMalloc unless  alloc <= hb
-export error VE_DoubleFree      unless  [FREE|HPRET] ; loc-overlap ; [FREE|HPRET] = 0
+export error VE_DoubleFree      unless  free; [FREE|HPRET] = 0
 
-export error VE_AccessFreed     unless  alloc^-1? ; free ; [FREE] <= hb
-export error VE_AccessFreed     unless  [FREE] ; free^-1 ; alloc = 0
-export error VE_AccessFreed     unless  [NOTHPPROT] ; alloc^-1? ; free ; [HPRET] <= hb
-export error VE_AccessFreed     unless  [HPRET] ; free^-1 ; alloc ; [NOTHPPROT] = 0
+export error VE_AccessFreed     unless  last_accesses; [FREE] <= hb
+export error VE_AccessFreed     unless  free ; [R | W] = 0
+export error VE_AccessFreed     unless  unprotected ; [HPRET] <= hb
+export error VE_AccessFreed     unless  retire ; [NOTHPPROT] = 0 // FIXME: wrong
 
 export error VE_RaceNotAtomic   unless  na_conflict <= hb
-export warning VE_WWRace        unless  ww_conflict <= porf
+export warning VE_WWRace        unless  ww_conflict <= porf // hb

@@ -98,7 +98,7 @@ void Config::parseOptions(int argc, char **argv)
 		{"export", no_argument, nullptr, 'e'},
 		{"name", required_argument, nullptr, 'n'},
 		{"prefix", required_argument, nullptr, 'p'},
-		{"femit-visit-arays", no_argument, nullptr, emitVisitArraysOpt},
+		{"femit-visit-arrays", no_argument, nullptr, emitVisitArraysOpt},
 		{"verbose", optional_argument, nullptr, 'v'},
 		{nullptr, 0, nullptr, 0} /* Terminator */
 	};

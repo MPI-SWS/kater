@@ -18,8 +18,11 @@
 
 #include "KatModule.hpp"
 #include "RegExpUtils.hpp"
+#include "Statement.hpp"
 
-void KatModule::registerExport(std::unique_ptr<ExportStatement> stmt, const yy::location &loc)
+#include <memory>
+
+void KatModule::registerExport(std::unique_ptr<ExportStatement> stmt)
 {
 	if (auto *cohCst = dynamic_cast<const CoherenceConstraint *>(stmt->getConstraint())) {
 		registerCOH(getRegisteredStatement(cohCst->getID()));

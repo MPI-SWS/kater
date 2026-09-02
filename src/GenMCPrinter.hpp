@@ -19,9 +19,12 @@
 #ifndef KATER_GENMC_PRINTER_HPP
 #define KATER_GENMC_PRINTER_HPP
 
+#include "CodeBuilder.hpp"
 #include "NFA.hpp"
 #include "Printer.hpp"
+#include "Statement.hpp"
 
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -31,7 +34,8 @@
 
 class KatModule;
 class Config;
-class DFSParameters;
+enum class TraversalKind : std::uint8_t;
+struct DFSParameters;
 class PredicateSet;
 class Constraint;
 class SubsetConstraint;
@@ -44,24 +48,34 @@ class GenMCPrinter : public Printer {
 
 public:
 	GenMCPrinter(const KatModule &module, const Config &conf);
+	GenMCPrinter(const GenMCPrinter &) = default;
+	GenMCPrinter(GenMCPrinter &&) = delete;
+	virtual ~GenMCPrinter() = default;
+
+	auto operator=(const GenMCPrinter &) -> GenMCPrinter & = default;
+	auto operator=(GenMCPrinter &&) -> GenMCPrinter & = delete;
 
 	/** Outputs consistency checking routines conforming to GenMC's API */
-	void output() override;
+	auto output() -> bool override;
 
 private:
-	void printPredSet(std::ostream &ostr, const std::string &arg, const PredicateSet &ps);
+	auto printPredSet(const std::string &arg, const PredicateSet &ps) -> std::string;
 
-	void printRelation(std::ostream &ostr, const std::string &res, const std::string &arg,
-			   const std::optional<Relation> &r);
-	void printTransLabel(std::ostream &ostr, const NFA::Transition &t, const std::string &res,
-			     const std::string &arg, const std::string &saveRes = {});
+	auto printRelation(const std::string &res, const std::string &arg,
+			   const std::optional<Relation> &r) -> std::string;
+	auto printTransLabel(const NFA::Transition &t, const std::string &res,
+			     const std::string &arg, const std::string &saveRes = {})
+		-> std::string;
 
-	static auto getPrintedIdx(const LetStatement *let) -> unsigned { return letToIdxMap[let]; }
-	static auto isMutRecRelation(Relation::ID id) -> bool
+	auto getPrintedIdx(const LetStatement *let) const -> unsigned
+	{
+		return letToIdxMap.at(let);
+	}
+	auto isMutRecRelation(Relation::ID id) const -> bool
 	{
 		return mutRecRelToLetMap.contains(id);
 	}
-	static auto getMutRecRelationDeclaration(Relation::ID id) -> const LetStatement *
+	auto getMutRecRelationDeclaration(Relation::ID id) const -> const LetStatement *
 	{
 		return mutRecRelToLetMap.at(id);
 	}
@@ -79,10 +93,11 @@ private:
 	void printPPoRfCpp(const NFA &nfa, bool deps);
 
 	void printHeader();
+	void printConsistency(const std::unordered_map<Statement *, std::string> &exportedNames);
+	void printCacheCounters();
 	void printFooter();
 
-	void outputDFSCode(const NFA &nfa, const DFSParameters &params);
-	void outputSCCCode(const NFA &nfa, const DFSParameters &params);
+	void outputTraversal(const NFA &nfa, const DFSParameters &params, TraversalKind kind);
 
 	[[nodiscard]] auto shouldPrintSuccAcycChecks() const -> bool;
 
@@ -90,11 +105,10 @@ private:
 	 * model acyclicity axioms utilize rf-1 */
 	[[nodiscard]] auto usesRfInvInAcycChecks() const -> bool;
 
-	[[nodiscard]] auto getStateVisitAssignment(const NFA &nfa) const
-		-> std::unordered_map<NFA::State *, bool>;
+	[[nodiscard]] auto getStateVisitAssignment(const NFA &nfa) const -> std::vector<char>;
 
-	auto hpp() -> std::ostream & { return *outHpp; }
-	auto cpp() -> std::ostream & { return *outCpp; }
+	auto hppB() -> CodeBuilder & { return *hppB_; }
+	auto cppB() -> CodeBuilder & { return *cppB_; }
 
 	/* Class name for resulting files */
 	std::string className;
@@ -110,10 +124,20 @@ private:
 	std::ofstream foutCpp; /* only set if we're writing to a file */
 	std::ostream *outCpp = &std::cout;
 
-	static std::unordered_map<Relation::ID, const LetStatement *> mutRecRelToLetMap;
-	static std::unordered_map<const LetStatement *, unsigned> letToIdxMap;
-	std::optional<unsigned> cohIndex{};
-	std::optional<unsigned> hbIndex{};
+	/* Indent-aware builders wrapping outHpp / outCpp. Initialized in
+	 * the ctor body once stream pointers are wired. */
+	std::optional<CodeBuilder> hppB_;
+	std::optional<CodeBuilder> cppB_;
+
+	std::unordered_map<Relation::ID, const LetStatement *> mutRecRelToLetMap;
+	std::unordered_map<const LetStatement *, unsigned> letToIdxMap;
+
+	/* One per `[P];any;[P] <= id` export whose check is cached as a `P`-count. */
+	struct CacheCounter {
+		std::string prefix;    /* names recompute<prefix>() and cacheCounter<prefix> */
+		std::string predCheck; /* `if (...)` guard selecting a counted label */
+	};
+	std::vector<CacheCounter> cacheCounters{};
 };
 
 #endif /* KATER_GENMC_PRINTER_HPP */

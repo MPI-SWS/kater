@@ -13,11 +13,6 @@ kater
 *.out
 
 src/.deps
-src/Lexer.hpp
-src/Lexer.cpp
-src/Parser.hpp
-src/Parser.cpp
-src/location.hh
 
 Makefile
 Makefile.in
@@ -51,3 +46,6 @@ CTestTestfile.cmake
 
 *.dot
 *.pdf
+# build directories
+/Release*/
+/RelWithDebInfo/

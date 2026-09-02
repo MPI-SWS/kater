@@ -49,12 +49,13 @@ public:
 	/** Returns a clone of the Constraint */
 	[[nodiscard]] virtual auto clone() const -> std::unique_ptr<Constraint> = 0;
 
+	/** Dumps the constraint; resolves names if THEORY is given */
+	virtual auto dump(std::ostream &s, const Theory *theory = nullptr) const
+		-> std::ostream & = 0;
+
 	friend auto operator<<(std::ostream &s, const Constraint &cst) -> std::ostream &;
 
 private:
-	/** Printing helper */
-	virtual auto dump(std::ostream &s) const -> std::ostream & = 0;
-
 	[[nodiscard]] auto isContainer() const -> bool override { return false; }
 
 	void visitChildren(BaseVisitor &visitor) const override {}
@@ -97,12 +98,12 @@ public:
 		return create(getRE()->clone());
 	}
 
-private:
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << "acyclic" << *getRE();
+		return getRE()->dump(s << "acyclic", theory);
 	}
 
+private:
 	std::unique_ptr<RegExp> re_{};
 };
 
@@ -136,12 +137,12 @@ public:
 		return create(getID());
 	}
 
-private:
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
 		return s << "coherence " << getID();
 	}
 
+private:
 	std::string id_;
 };
 
@@ -189,9 +190,11 @@ public:
 		return create(getLHS()->clone(), getRHS()->clone(), sameEnds(), rotated());
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << *getLHS() << " <= " << *getRHS();
+		getLHS()->dump(s, theory)
+			<< (sameEnds() ? " & id" : "") << " <= " << (rotated() ? "rot " : "");
+		return getRHS()->dump(s, theory);
 	}
 
 private:
@@ -233,9 +236,11 @@ public:
 		return create(getLHS()->clone(), getRHS()->clone(), sameEnds(), rotated());
 	}
 
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << *getLHS() << " = " << *getRHS() << "\n";
+		getLHS()->dump(s, theory)
+			<< (sameEnds() ? " & id" : "") << " = " << (rotated() ? "rot " : "");
+		return getRHS()->dump(s, theory);
 	}
 };
 
@@ -269,12 +274,12 @@ public:
 		return create(getRE()->clone());
 	}
 
-private:
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << "total " << *getRE();
+		return getRE()->dump(s << "total ", theory);
 	}
 
+private:
 	std::unique_ptr<RegExp> re_{};
 };
 
@@ -302,12 +307,12 @@ public:
 		return create(getWarningName());
 	}
 
-private:
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << "warning(" << getWarningName();
+		return s << "warning(" << getWarningName() << ")";
 	}
 
+private:
 	std::string warningName_{};
 };
 
@@ -336,11 +341,12 @@ public:
 		return create(getWarningName());
 	}
 
-private:
-	auto dump(std::ostream &s) const -> std::ostream & override
+	auto dump(std::ostream &s, const Theory *theory = nullptr) const -> std::ostream & override
 	{
-		return s << "error(" << getWarningName();
+		return s << "error(" << getWarningName() << ")";
 	}
+
+private:
 };
 
 #endif /* KATER_CONSTRAINT_HPP */

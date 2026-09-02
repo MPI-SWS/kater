@@ -6,6 +6,25 @@ released.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026.09.02
+### Added
+
+- A number of performance optimizations, including antichain-based inclusion checking
+- `cmake --install` now installs the `kater` binary
+- Better diagnostics for code export
+- Developer documentation (see `doc/development.md`) and clang-tidy config
+
+### Changed
+
+- Changed code export (e.g., for user-defined relations)
+- A C++23 compiler is required
+- flex/bison sources are generated out of tree
+
+### Fixes
+
+- Many bug fixes
+- Properly resolve diamond and cyclic include paths
+
 ## [0.3.1] - 2025.11.11
 ### Changed
 

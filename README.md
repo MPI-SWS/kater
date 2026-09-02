@@ -29,15 +29,17 @@ please issue the following command:
 
 		docker pull genmc/kater
 
+You can then run the container by issuing `docker run -it genmc/kater`
+
 ### Building from source
 
 #### Dependencies
 
-To use Kater you need a C++20 compiler, cmake, flex (>= 2.6.4)
+To use Kater you need a C++23 compiler, cmake, flex (>= 2.6.4)
 and bison (>= 3.7.5) . On a Debian-based installation, the necessary
 dependencies are met by installing the following packages:
 
-	cmake make g++ flex bison
+	cmake make g++ flex bison libfl-dev
 
 #### Installing
 

@@ -22,8 +22,12 @@
 #include "DbgInfo.hpp"
 #include "VSet.hpp"
 
+#include "Error.hpp"
+
 #include <algorithm>
+#include <array>
 #include <cassert>
+#include <compare>
 #include <ranges>
 #include <set>
 #include <string>
@@ -32,6 +36,8 @@
 #include <vector>
 
 class PredicateSet;
+class Theory;
+
 using PredExport = std::string;
 struct PredicateInfo {
 	std::string name;
@@ -53,6 +59,7 @@ public:
 	enum class BuiltinID {
 		/* Access modes */
 		NA = 0,
+		ATOM,
 		RLX,
 		ACQ,
 		REL,
@@ -94,7 +101,7 @@ public:
 		LOC
 	};
 
-	Predicate() = delete;
+	Predicate() = default;
 
 	/** Creates a built-in predicate */
 	static auto createBuiltin(BuiltinID b) -> Predicate { return {getBuiltinID(b)}; }
@@ -135,8 +142,10 @@ private:
 	/** Returns a fresh unique identifier */
 	static auto getFreshID() -> ID { return --dispenser; }
 
-	ID id;
-	bool comp = false;
+	/* One word: sets store these inline, so a Predicate's size decides how much
+	 * a sorted transition vector shifts per insert. 31 bits is ample */
+	ID id : 31 {};
+	bool comp : 1 {false};
 
 	static inline ID dispenser{}; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 };
@@ -155,65 +164,95 @@ struct PredicateHasher {
 class PredicateSet {
 
 public:
-	using PredSet = VSet<Predicate>;
-
-	// using iterator = PredSet::iterator;
-	using const_iterator = PredSet::const_iterator;
+	/*
+	 * We keep the predicates inline. A Transition holds a TransLabel by value,
+	 * which holds two of these, so this is what makes a Transition trivially
+	 * copyable. Kater uses two or three predicates per set; four is the most we
+	 * have seen.
+	 */
+	static constexpr unsigned inlineCapacity = 8;
+	using const_iterator = const Predicate *;
 
 	PredicateSet() = default;
-	PredicateSet(Predicate p) : preds_({p}) {}
-	PredicateSet(std::initializer_list<Predicate> preds) : preds_(preds) {}
+	PredicateSet(Predicate p) : size_(1) { preds_[0] = p; }
+	PredicateSet(std::initializer_list<Predicate> preds)
+	{
+		for (auto p : preds)
+			insert(p);
+	}
 
-	// auto begin() -> iterator { return preds_.begin(); }
-	// auto end() -> iterator { return preds_.end(); }
-	// auto preds() { return std::ranges::ref_view(preds_); }
+	[[nodiscard]] auto begin() const -> const_iterator { return preds_.data(); }
+	[[nodiscard]] auto end() const -> const_iterator { return preds_.data() + size_; }
+	[[nodiscard]] auto preds() const { return std::ranges::subrange(begin(), end()); }
 
-	[[nodiscard]] auto begin() const -> const_iterator { return preds_.begin(); }
-	[[nodiscard]] auto end() const -> const_iterator { return preds_.end(); }
-	[[nodiscard]] auto preds() const { return std::ranges::ref_view(preds_); }
+	[[nodiscard]] auto empty() const -> bool { return size_ == 0; }
+	[[nodiscard]] auto size() const -> unsigned { return size_; }
 
-	/** Whether the predicate set is empty */
-	[[nodiscard]] auto empty() const -> bool { return preds_.empty(); }
-
-	/** Returns the size of the predicate set */
-	[[nodiscard]] auto size() const { return preds_.size(); }
-
-	/* Inserts P into THIS (if THIS does not already contain P).
-	 * Returns whether the insertion took place */
-	auto insert(const Predicate &p) -> bool { return preds_.insert(p).second; }
+	auto insert(const Predicate &p) -> bool
+	{
+		auto *it = std::lower_bound(begin(), end(), p);
+		if (it != end() && *it == p)
+			return false;
+		VERIFY(size_ < inlineCapacity, "too many composing predicates on a transition");
+		auto pos = it - begin();
+		for (auto i = size_; i > pos; i--)
+			preds_[i] = preds_[i - 1];
+		preds_[pos] = p;
+		size_++;
+		return true;
+	}
 	auto insert(const PredicateSet &other) -> bool
 	{
 		auto result = false;
-		for (const auto &p : other.preds_)
-			result |= preds_.insert(p).second;
+		for (const auto &p : other)
+			result |= insert(p);
 		return result;
 	}
 
-	/* Whether THIS contains element P */
-	[[nodiscard]] auto contains(const Predicate &p) const -> bool { return preds_.contains(p); }
-
-	/* Whether THIS contains set OTHER */
+	[[nodiscard]] auto contains(const Predicate &p) const -> bool
+	{
+		return std::binary_search(begin(), end(), p);
+	}
 	[[nodiscard]] auto contains(const PredicateSet &other) const -> bool
 	{
-		return other.preds_.subsetOf(this->preds_);
+		return std::includes(begin(), end(), other.begin(), other.end());
 	}
 
-	/** Removes P from THIS */
-	void minus(const Predicate &p) { preds_.erase(p); }
-
-	/** Removes all predicates appearing in OTHER from THIS */
+	void minus(const Predicate &p)
+	{
+		auto *it = std::lower_bound(begin(), end(), p);
+		if (it == end() || !(*it == p))
+			return;
+		auto pos = it - begin();
+		for (auto i = pos; i + 1 < size_; i++)
+			preds_[i] = preds_[i + 1];
+		size_--;
+	}
 	void minus(const PredicateSet &other)
 	{
-		for (const auto &p : other.preds())
-			preds_.erase(p);
+		for (const auto &p : other)
+			minus(p);
 	}
 
-	inline auto operator<=>(const PredicateSet &other) const = default;
+	auto operator<=>(const PredicateSet &other) const
+	{
+		return std::lexicographical_compare_three_way(begin(), end(), other.begin(),
+							      other.end());
+	}
+	auto operator==(const PredicateSet &other) const -> bool
+	{
+		return size_ == other.size_ && std::equal(begin(), end(), other.begin());
+	}
 
-	friend auto operator<<(std::ostream &ostr, const PredicateSet &preds) -> std::ostream &;
+	/** Prints the conjunction as [a&b]; resolves names if THEORY is given */
+	auto dump(std::ostream &ostr, const Theory *theory = nullptr) const -> std::ostream &;
 
 private:
-	PredSet preds_{};
+	std::array<Predicate, inlineCapacity> preds_{};
+	unsigned size_ = 0;
 };
+
+/* Renders PRED via THEORY, or as a debug token if THEORY does not know it */
+auto nameOf(const Predicate &pred, const Theory *theory) -> std::string;
 
 #endif /* KATER_PREDICATE_HPP */

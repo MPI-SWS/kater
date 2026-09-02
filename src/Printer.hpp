@@ -31,8 +31,8 @@ protected:
 	Printer(const KatModule &module, const Config &conf);
 
 public:
-	/** Generates all consistency checking code from the module */
-	virtual void output() = 0;
+	/** Generates all consistency checking code; returns whether everything was exported */
+	virtual auto output() -> bool = 0;
 
 protected:
 	[[nodiscard]] auto getModule() const -> const KatModule & { return module_; }

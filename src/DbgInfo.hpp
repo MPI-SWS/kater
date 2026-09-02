@@ -19,16 +19,23 @@
 #ifndef KATER_DBG_INFO_HPP
 #define KATER_DBG_INFO_HPP
 
+#include <iosfwd>
 #include <string>
 
+/* A source range; a zero COLUMN means the location is line-only */
 struct DbgInfo {
-	DbgInfo(const std::string *name, int line)
-		: filename(name != nullptr ? *name : ""), line(line)
+	DbgInfo(const std::string *name, int line, int column = 0, int endLine = 0,
+		int endColumn = 0)
+		: filename(name != nullptr ? *name : ""), line(line), column(column),
+		  endLine(endLine), endColumn(endColumn)
 	{
 	}
 
 	std::string filename;
 	int line;
+	int column;
+	int endLine;
+	int endColumn;
 
 	friend auto operator<<(std::ostream &ostr, const DbgInfo &dbg) -> std::ostream &;
 };

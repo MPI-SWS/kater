@@ -23,6 +23,7 @@
 #include "Printer.hpp"
 
 #include <cstring>
+#include <iostream>
 #include <memory>
 
 auto main(int argc, char **argv) -> int
@@ -32,7 +33,7 @@ auto main(int argc, char **argv) -> int
 	config.parseOptions(argc, argv);
 
 	if (config.verbose >= 1) {
-		std::cout << "Parsing file " << config.inputFile << "... ";
+		std::cerr << "Parsing file " << config.inputFile << "... ";
 	}
 
 	ParsingDriver parser;
@@ -40,30 +41,30 @@ auto main(int argc, char **argv) -> int
 		exit(EPARSE);
 	}
 	if (config.verbose >= 1) {
-		std::cout << "Done.\n";
+		std::cerr << "Done.\n";
 	}
 
 	Kater kater(config, parser.takeModule());
 
 	if (config.verbose >= 1) {
-		std::cout << "Checking assertions... ";
+		std::cerr << "Checking assertions... ";
 	}
 	if (!kater.checkAssertions()) {
 		exit(ECHECK);
 	}
 	if (config.verbose >= 1) {
-		std::cout << "Done.\n";
+		std::cerr << "Done.\n";
 	}
 
 	if (config.generate) {
 		if (config.verbose >= 1) {
-			std::cout << "Exporting code... ";
+			std::cerr << "Exporting code... ";
 		}
 		if (!kater.exportCode()) {
 			exit(EPRINT);
 		}
 		if (config.verbose >= 1) {
-			std::cout << "Done.\n";
+			std::cerr << "Done.\n";
 		}
 	}
 

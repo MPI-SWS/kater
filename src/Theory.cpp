@@ -18,8 +18,26 @@
 
 #include "Theory.hpp"
 
+#include "Predicate.hpp"
+#include "Relation.hpp"
+
 #include <numeric>
 #include <ranges>
+#include <string>
+
+auto nameOf(const Relation &rel, const Theory *theory) -> std::string
+{
+	auto name = theory != nullptr && theory->hasInfo(rel) ? theory->getInfo(rel).name
+							      : "$" + std::to_string(rel.getID());
+	return rel.isInverse() ? name + "^-1" : name;
+}
+
+auto nameOf(const Predicate &pred, const Theory *theory) -> std::string
+{
+	auto name = theory != nullptr && theory->hasInfo(pred) ? theory->getInfo(pred).name
+							       : "#" + std::to_string(pred.getID());
+	return pred.isComplement() ? "~" + name : name;
+}
 
 auto Theory::isEco(const TransLabel &label) const -> bool
 {

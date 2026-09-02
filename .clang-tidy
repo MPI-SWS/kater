@@ -4,6 +4,7 @@ Checks: |
   clang-diagnostic-*,
   concurrency-*,
   cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-do-while,
   llvm-*,
   -llvmlibc-restrict-system-libc-headers,
   -llvm-header-guard,

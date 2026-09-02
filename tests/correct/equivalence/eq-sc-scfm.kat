@@ -4,4 +4,4 @@ include "../../../kat/sc-fm.kat"
 // WTP: sc == sc-fm
 
 assert [R|W|F];sc::sc+;[R|W|F] & id <= rot (sc-fm::sc+ | sc-fm::hb;fr?)
-assert [R|W|F];(rot (sc-fm::sc+ | sc-fm::hb;fr?));[R|W|F] & id <= [R|W|F];sc::sc+;[R|W|F]
+assert (sc-fm::sc+ | sc-fm::hb;fr?) & id <= rot (sc::sc+)

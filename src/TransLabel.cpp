@@ -18,11 +18,14 @@
 
 #include "TransLabel.hpp"
 
+#include "Predicate.hpp"
+#include "Relation.hpp"
+#include "Theory.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <set>
-#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -59,19 +62,18 @@ auto TransLabel::merge(const TransLabel &other,
 	return isValid(t);
 }
 
-auto TransLabel::toString() const -> std::string
+auto TransLabel::dump(std::ostream &ostr, const Theory *theory) const -> std::ostream &
 {
-	std::stringstream ss;
 	if (isPredicate()) {
-		ss << getPreChecks();
-	} else {
-		if (!getPreChecks().empty()) {
-			ss << getPreChecks() << ";";
-		}
-		ss << getRelation()->getName();
-		if (!getPostChecks().empty()) {
-			ss << ";" << getPostChecks();
-		}
+		return getPreChecks().dump(ostr, theory);
 	}
-	return ss.str();
+
+	if (!getPreChecks().empty()) {
+		getPreChecks().dump(ostr, theory) << ";";
+	}
+	ostr << nameOf(*getRelation(), theory);
+	if (!getPostChecks().empty()) {
+		getPostChecks().dump(ostr << ";", theory);
+	}
+	return ostr;
 }

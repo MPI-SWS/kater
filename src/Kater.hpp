@@ -52,15 +52,17 @@ private:
 
 	[[nodiscard]] auto getConf() const -> const Config & { return config; }
 
+	[[nodiscard]] auto getTheory() const -> const Theory & { return getModule().getTheory(); }
+
 	auto isPPOIntersectionInPPO(const AcyclicConstraint *acyc) const -> InclusionResult;
 	auto isDFASubLanguageOfNFA(NFA &nfa, const NFA &other) const -> InclusionResult;
 	[[nodiscard]] auto checkInclusion(SubsetConstraint &subsetC) const -> InclusionResult;
 	auto checkAssertion(Constraint &cst) -> InclusionResult;
 
 	void optimizeModuleForExport();
+	void makeViewsIncremental();
+	auto checkSavedRelsExportRequirements(const RegExp &pporf) -> bool;
 	auto checkExportRequirements() -> bool;
-
-	void printCounterexample(const Counterexample &cex) const;
 
 	const Config &config;
 	std::unique_ptr<KatModule> module;

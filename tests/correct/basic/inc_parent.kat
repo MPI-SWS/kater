@@ -1,0 +1,2 @@
+include "inc_child.kat"
+assert inc_child::inc_x <= po

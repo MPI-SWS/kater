@@ -21,6 +21,8 @@
 
 #include "RegExp.hpp"
 
+#include <memory>
+
 /* Does a post-order visitation of R, applying FUN */
 template <typename F> static inline void visitRE(std::unique_ptr<RegExp> &r, F &&fun)
 {
@@ -36,6 +38,16 @@ static inline void replaceREWith(std::unique_ptr<RegExp> &r, const RegExp *from,
 		if (*r == *from)
 			r = to->clone();
 	});
+}
+
+/* Returns a copy of RE with every `any` (Univ) sub-expression replaced by `any*`. */
+static inline auto starifyAny(std::unique_ptr<RegExp> re) -> std::unique_ptr<RegExp>
+{
+	if (re->isAnyRelation())
+		return StarRE::createOpt(std::move(re));
+	for (auto i = 0U; i < re->getNumKids(); ++i)
+		re->setKid(i, starifyAny(re->releaseKid(i)));
+	return re;
 }
 
 #endif /* KATER_REGEXP_UTILS_HPP */

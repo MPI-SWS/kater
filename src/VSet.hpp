@@ -40,7 +40,7 @@ public:
 	VSet(const std::vector<T> &v) : vset_(v) {}
 
 	/* Pre: v is sorted and distinct */
-	VSet(std::vector<T> &&v) : vset_(std::move(v)){};
+	VSet(std::vector<T> &&v) : vset_(std::move(v)) {};
 
 	template <typename ITER> VSet(ITER begin, ITER end)
 	{
@@ -64,7 +64,7 @@ public:
 		}
 	}
 
-	virtual ~VSet() = default;
+	~VSet() = default;
 
 	using const_iterator = typename Set::const_iterator;
 	using const_reverse_iterator = typename Set::const_reverse_iterator;

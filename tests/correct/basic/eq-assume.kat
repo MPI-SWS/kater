@@ -1,0 +1,8 @@
+relation a
+relation b
+
+// An equality assumption has to be usable in both directions
+assume a = b
+
+assert a <= b
+assert b <= a

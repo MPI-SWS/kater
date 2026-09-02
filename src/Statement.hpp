@@ -197,9 +197,10 @@ class ExportStatement : public Statement {
 protected:
 	ExportStatement(std::unique_ptr<Constraint> constraint, std::unique_ptr<Constraint> unless,
 			std::optional<std::string> codeToPrint,
-			std::optional<std::string> nameOfExtra)
+			std::optional<std::string> nameOfExtra, std::optional<DbgInfo> dbg = {})
 		: Statement(std::move(constraint)), id_(dispenser++), unless_(std::move(unless)),
-		  codeToPrint_(std::move(codeToPrint)), nameOfExtra_(std::move(nameOfExtra))
+		  codeToPrint_(std::move(codeToPrint)), nameOfExtra_(std::move(nameOfExtra)),
+		  dbg_(std::move(dbg))
 	{
 	}
 
@@ -237,11 +238,14 @@ public:
 	/** Returns true if this is an extra export that should not be used in consistency checks */
 	[[nodiscard]] auto isExtra() const -> bool { return getNameOfExtra().has_value(); }
 
+	/** Returns the debug info associated with the export */
+	[[nodiscard]] auto getDbgInfo() const -> const std::optional<DbgInfo> & { return dbg_; }
+
 	[[nodiscard]] auto clone() const -> std::unique_ptr<Statement> override
 	{
 		return create(getConstraint()->clone(),
 			      getUnless() ? getUnless()->clone() : nullptr, getCodeToPrint(),
-			      getNameOfExtra());
+			      getNameOfExtra(), getDbgInfo());
 	}
 
 protected:
@@ -258,6 +262,7 @@ private:
 	std::unique_ptr<Constraint> unless_{};
 	std::optional<std::string> codeToPrint_{};
 	std::optional<std::string> nameOfExtra_{};
+	std::optional<DbgInfo> dbg_{};
 
 	/* A unique ID for each export statement */
 	static inline unsigned
@@ -270,8 +275,9 @@ private:
 class AssumeStatement : public Statement {
 
 protected:
-	AssumeStatement(std::unique_ptr<Constraint> constraint, bool temporary)
-		: Statement(std::move(constraint)), temporary_(temporary)
+	AssumeStatement(std::unique_ptr<Constraint> constraint, bool temporary,
+			std::optional<DbgInfo> dbg = {})
+		: Statement(std::move(constraint)), temporary_(temporary), dbg_(std::move(dbg))
 	{
 	}
 
@@ -288,9 +294,12 @@ public:
 
 	void setTemporary(bool status) { temporary_ = status; }
 
+	/** Returns the debug info associated with the assumption, if it is user-written */
+	[[nodiscard]] auto getDbgInfo() const -> const std::optional<DbgInfo> & { return dbg_; }
+
 	[[nodiscard]] auto clone() const -> std::unique_ptr<Statement> override
 	{
-		return create(getConstraint()->clone(), isTemporary());
+		return create(getConstraint()->clone(), isTemporary(), getDbgInfo());
 	}
 
 private:
@@ -300,6 +309,7 @@ private:
 	}
 
 	bool temporary_{};
+	std::optional<DbgInfo> dbg_{};
 };
 
 /*

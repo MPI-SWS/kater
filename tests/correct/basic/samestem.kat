@@ -1,0 +1,3 @@
+// the included file shares this file's stem; it must still be parsed
+include "samestem.inc"
+assert samestem::samestem_x <= po

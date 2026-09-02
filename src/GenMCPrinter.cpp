@@ -18,20 +18,25 @@
 
 #include "GenMCPrinter.hpp"
 
+#include <algorithm>
+
 #include "Config.hpp"
 #include "KatModule.hpp"
+#include "Logger.hpp"
 #include "NFAUtils.hpp"
+#include "RegExp.hpp"
 #include "RegExpUtils.hpp"
 #include "Utils.hpp"
 
 #include <fstream>
+#include <functional>
+#include <sstream>
 
 using namespace std::literals;
 
-std::unordered_map<Relation::ID, const LetStatement *> GenMCPrinter::mutRecRelToLetMap;
-std::unordered_map<const LetStatement *, unsigned> GenMCPrinter::letToIdxMap;
+namespace {
 
-const static char *genmcCopyright =
+const char *genmcCopyright =
 	R"(/*
  * GenMC -- Generic Model Checking.
  *
@@ -46,13 +51,13 @@ const static char *genmcCopyright =
  */
 )";
 
-const static char *katerNotice =
+const char *katerNotice =
 	R"(/*******************************************************************************
  * CAUTION: This file is generated automatically by Kater -- DO NOT EDIT.
  *******************************************************************************/
 )";
 
-const static char *coherenceFuns =
+const char *coherenceFuns =
 	R"(
 static auto isWriteRfBefore(const WriteLabel *wLab, const EventLabel *lab) -> bool
 {
@@ -73,22 +78,22 @@ static auto isHbOptRfBefore(const EventLabel *lab, const WriteLabel *wLab) -> bo
 static auto splitLocMOBefore(SAddr addr, EventLabel *lab) -> ExecutionGraph::co_iterator
 {
 	auto &g = *lab->getParent();
-	auto rit = std::find_if(g.co_rbegin(addr), g.co_rend(addr),
-				[&](auto &oLab) { return isWriteRfBefore(&oLab, lab); });
+	auto rit = std::ranges::find_if(g.rco(addr), [&](auto &oLab)
+					{ return isWriteRfBefore(&oLab, lab); });
 	/* Convert to forward iterator, but be _really_ careful */
-	return (rit == g.co_rend(addr)) ? g.co_begin(addr) : ++ExecutionGraph::co_iterator(*rit);
+	return (rit == std::ranges::end(g.rco(addr))) ? std::ranges::begin(g.co(addr)) : ++ExecutionGraph::co_iterator(*rit);
 }
 
 static auto splitLocMOAfterHb(ReadLabel *rLab) -> ExecutionGraph::co_iterator
 {
 	auto &g = *rLab->getParent();
-	if (std::any_of(g.init_rf_begin(rLab->getAddr()), g.init_rf_end(rLab->getAddr()),
+	if (std::ranges::any_of(g.getInitLabel()->rfs(rLab->getAddr()),
 			[rLab](auto &rfLab) { return rfLab.view(#HB#).contains(rLab->getPos()); }))
-		return g.co_begin(rLab->getAddr());
+		return std::ranges::begin(g.co(rLab->getAddr()));
 
-	auto it = std::find_if(g.co_begin(rLab->getAddr()), g.co_end(rLab->getAddr()),
+	auto it = std::ranges::find_if(g.co(rLab->getAddr()),
 			       [&](auto &wLab) { return isHbOptRfBefore(rLab, &wLab); });
-	if (it == g.co_end(rLab->getAddr()) || it->view(#HB#).contains(rLab->getPos()))
+	if (it == std::ranges::end(g.co(rLab->getAddr())) || it->view(#HB#).contains(rLab->getPos()))
 		return it;
 	return ++it;
 }
@@ -96,7 +101,7 @@ static auto splitLocMOAfterHb(ReadLabel *rLab) -> ExecutionGraph::co_iterator
 static auto splitLocMOAfter(WriteLabel *wLab) -> ExecutionGraph::co_iterator
 {
 	auto &g = *wLab->getParent();
-	return std::find_if(g.co_begin(wLab->getAddr()), g.co_end(wLab->getAddr()),
+	return std::ranges::find_if(g.co(wLab->getAddr()),
 			    [&](auto &sLab) { return isHbOptRfBefore(wLab, &sLab); });
 }
 
@@ -117,7 +122,7 @@ auto #CLASS#::getCoherentStores(ReadLabel *rLab) -> std::vector<EventLabel *>
 	 * stores and the mo-latest of the (rf?;hb)-before stores.
 	 */
 	auto begIt = splitLocMOBefore(rLab->getAddr(), rLab);
-	if (begIt == g.co_begin(rLab->getAddr()))
+	if (begIt == std::ranges::begin(g.co(rLab->getAddr())))
 		stores.push_back(g.getInitLabel());
 	else {
 		stores.push_back(&*(--begIt));
@@ -129,7 +134,7 @@ auto #CLASS#::getCoherentStores(ReadLabel *rLab) -> std::vector<EventLabel *>
 	 * account for the possibility the read is hb-before some other
 	 * store, or some read that reads from a store.
 	 */
-	auto endIt = (isDepTracking()) ? splitLocMOAfterHb(rLab) : g.co_end(rLab->getAddr());
+	auto endIt = (isDepTracking()) ? splitLocMOAfterHb(rLab) : std::ranges::end(g.co(rLab->getAddr()));
 	std::transform(begIt, endIt, std::back_inserter(stores), [&](auto &lab){
 		return &lab;
 	});
@@ -142,11 +147,11 @@ static auto getMOOptRfAfter(WriteLabel *sLab) -> std::vector<EventLabel *>
 	std::vector<EventLabel *> after;
 	std::vector<ReadLabel *> rfAfter;
 
-	std::for_each(g.co_succ_begin(sLab), g.co_succ_end(sLab), [&](auto &wLab) {
+	for (auto &wLab : g.co_succs(sLab)) {
 		after.push_back(&wLab);
-		std::transform(wLab.readers_begin(), wLab.readers_end(),
-			       std::back_inserter(rfAfter), [&](auto &rLab) { return &rLab; });
-	});
+		std::ranges::transform(wLab.readers(), std::back_inserter(rfAfter),
+			[&](auto &rLab) { return &rLab; });
+	}
 	std::transform(rfAfter.begin(), rfAfter.end(), std::back_inserter(after),
 		       [](auto *rLab) { return rLab; });
 	return after;
@@ -159,24 +164,23 @@ static auto getMOInvOptRfAfter(WriteLabel *sLab) -> std::vector<EventLabel *>
 	std::vector<ReadLabel *> rfAfter;
 
 	/* First, add (mo;rf?)-before */
-	std::for_each(g.co_pred_begin(sLab), g.co_pred_end(sLab), [&](auto &wLab) {
+	for (auto &wLab : g.co_preds(sLab)) {
 		after.push_back(&wLab);
-		std::transform(wLab.readers_begin(), wLab.readers_end(),
-			       std::back_inserter(rfAfter), [&](auto &rLab) { return &rLab; });
-	});
+		std::ranges::transform(wLab.readers(), std::back_inserter(rfAfter),
+			[&](auto &rLab) { return &rLab; });
+	}
 	std::transform(rfAfter.begin(), rfAfter.end(), std::back_inserter(after),
 		       [](auto *rLab) { return rLab; });
 
 	/* Then, we add the reader list for the initializer */
-	std::for_each(g.init_rf_begin(sLab->getAddr()), g.init_rf_end(sLab->getAddr()),
-		      [&](auto &rLab) { after.insert(after.end(), &rLab); });
+	for (auto &rLab : g.getInitLabel()->rfs(sLab->getAddr()))
+		after.insert(after.end(), &rLab);
 	return after;
 }
 
-static auto getRevisitableFrom(WriteLabel *sLab, const VectorClock &pporf, WriteLabel *coPred)
-	-> std::vector<ReadLabel *>
+[[maybe_unused]] static auto getRevisitableFrom(WriteLabel *sLab, const VectorClock &pporf,
+						WriteLabel *coPred) -> std::vector<ReadLabel *>
 {
-	auto &g = *sLab->getParent();
 	const auto *confLab = findPendingRMW(sLab);
 	std::vector<ReadLabel *> loads;
 
@@ -249,16 +253,16 @@ auto #CLASS#::getCoherentPlacings(WriteLabel *wLab)
 	/* If it is an RMW store, there is only one possible position in MO */
 	if (wLab->isRMW()) {
 		auto *rLab = genmc::dyn_cast<ReadLabel>(g.po_imm_pred(wLab));
-		BUG_ON(!rLab);
+		VERIFY(rLab);
 		auto *rfLab = rLab->getRf();
-		BUG_ON(!rfLab);
+		VERIFY(rfLab);
 		result.push_back(rfLab);
 		return result;
 	}
 
 	/* Otherwise, we calculate the full range and add the store */
 	auto rangeBegin = splitLocMOBefore(wLab->getAddr(), wLab);
-	auto rangeEnd = (isDepTracking()) ? splitLocMOAfter(wLab) : g.co_end(wLab->getAddr());
+	auto rangeEnd = (isDepTracking()) ? splitLocMOAfter(wLab) : std::ranges::end(g.co(wLab->getAddr()));
 	auto cos = std::ranges::subrange(rangeBegin, rangeEnd) |
 		   std::views::filter([&](auto &sLab) { return !sLab.isRMW(); }) |
 		   std::views::transform([&](auto &sLab) {
@@ -266,7 +270,7 @@ auto #CLASS#::getCoherentPlacings(WriteLabel *wLab)
 			   return pLab ? (EventLabel *)pLab : (EventLabel *)g.getInitLabel();
 		   });
 	std::ranges::copy(cos, std::back_inserter(result));
-	result.push_back(rangeEnd == g.co_end(wLab->getAddr())
+	result.push_back(rangeEnd == std::ranges::end(g.co(wLab->getAddr()))
 				 ? g.co_max(wLab->getAddr())
 				 : (!g.co_imm_pred(&*rangeEnd)
 					    ? (EventLabel *)g.getInitLabel()
@@ -274,26 +278,187 @@ auto #CLASS#::getCoherentPlacings(WriteLabel *wLab)
 	return result;
 })";
 
+const char *commonHeaderDeclarations =
+	R"(#ifndef #GUARDNAME#
+#define #GUARDNAME#
+
+#include "genmc/Execution/Consistency/ConsistencyChecker.hpp"
+#include "genmc/Execution/EventLabel.hpp"
+#include <cstdint>
+#include <vector>
+#include <concepts>
+
+// NOLINTBEGIN
+class #CLASS# : public ConsistencyChecker {
+
+private:
+	enum class NodeStatus : uint32_t { unseen = 0, entered = 1, left = 2 };
+
+	struct DFSWorklistEntry {
+		DFSWorklistEntry() = default;
+		DFSWorklistEntry(uint32_t state, const EventLabel *lab, bool finishing = false)
+			: nfaState(state), lab(lab), isFinishing(finishing)
+		{}
+		uint32_t nfaState;
+		const EventLabel *lab;
+		bool isFinishing;
+	};
+
+	template <std::unsigned_integral T>
+	class NodeStatusVector {
+	public:
+		NodeStatusVector() = default;
+		NodeStatusVector(size_t size)
+			: visited(size), baseStatus(0)
+		{}
+
+		[[nodiscard]] auto getStatus(size_t i) const -> NodeStatus
+		{
+			auto status = visited[i];
+			if (status < baseStatus)
+				return NodeStatus::unseen;
+			return static_cast<NodeStatus>(status - baseStatus);
+		}
+
+		void setStatus(size_t i, NodeStatus s) { visited[i] = baseStatus + static_cast<T>(s); }
+
+		void maybeClearResize(size_t newSize)
+		{
+			if (baseStatus >= std::numeric_limits<T>::max() - 6) {
+				visited.clear();
+				baseStatus = 0;
+			} else {
+				baseStatus += 3;
+			}
+			visited.resize(newSize);
+		}
+
+	private:
+		mutable std::vector<T> visited;
+		T baseStatus{};
+	};
+
+	class NodeVisitStatusVector {
+	private:
+		struct NodeVisitStatus {
+			NodeVisitStatus() = default;
+			NodeVisitStatus(uint32_t count, uint32_t status)
+				: count(count), status(status)
+			{}
+			uint32_t count{};
+			uint32_t status{};
+		};
+
+	public:
+		NodeVisitStatusVector() = default;
+		NodeVisitStatusVector(size_t size)
+			: visited(size), baseStatus(0), baseCount(0), currIterationMaxCount(0)
+		{}
+
+		[[nodiscard]] auto getStatus(size_t i) const -> NodeStatus
+		{
+			auto status = visited[i].status;
+			if (status < baseStatus)
+				return NodeStatus::unseen;
+			return static_cast<NodeStatus>(status - baseStatus);
+		}
+
+		void setStatus(size_t i, NodeStatus s) { visited[i].status = baseStatus + static_cast<uint32_t>(s); }
+
+		[[nodiscard]] auto getCount(size_t i) const -> uint32_t
+		{
+			auto count = visited[i].count;
+			if (count < baseCount)
+				return 0;
+			return count - baseCount;
+		}
+
+		auto setCountIncr(size_t i, uint32_t count)
+		{
+			const uint32_t newCount = baseCount + count;
+			visited[i].count = newCount;
+			currIterationMaxCount = std::max(currIterationMaxCount, newCount);
+		}
+
+		void setIncr(size_t i, uint32_t count, NodeStatus status)
+		{
+			setCountIncr(i, count);
+			setStatus(i, status);
+		}
+
+		void set(size_t i, uint32_t count, NodeStatus status)
+		{
+			visited[i].count = baseCount + count;
+			setStatus(i, status);
+		}
+
+		void maybeClearResize(size_t newSize)
+		{
+			if (baseStatus >= UINT32_MAX - 6 || currIterationMaxCount > UINT32_MAX / 2) {
+				visited.clear();
+				baseStatus = 0;
+				baseCount = 0;
+			} else {
+				baseStatus += 3;
+				baseCount = currIterationMaxCount;
+			}
+			currIterationMaxCount = 0;
+			visited.resize(newSize);
+		}
+
+	private:
+		mutable std::vector<NodeVisitStatus> visited;
+		uint32_t baseStatus{};
+		uint32_t baseCount{};
+		uint32_t currIterationMaxCount{};
+	};
+
+
+public:
+	#CLASS#(const Config *conf) : ConsistencyChecker(conf) {};
+
+private:
+	bool isConsistent(const EventLabel *lab) const override;
+	bool isConsistent(const ExecutionGraph &g) const override;
+	bool isCoherentRelinche(const ExecutionGraph &g) const override;
+	std::optional<VerificationError> checkErrors(const EventLabel *lab, const EventLabel *&race) const override;
+	std::vector<VerificationError> checkWarnings(const EventLabel *lab, const VSet<VerificationError> &reported, std::vector<const EventLabel *> &races) const override;
+	std::vector<EventLabel *> getCoherentStores(ReadLabel *rLab) override;
+	void filterCoherentRevisits(WriteLabel *sLab, std::vector<ReadLabel *> &ls) override;
+	std::vector<EventLabel *> getCoherentPlacings(WriteLabel *sLab) override;
+	void updateMMViews(EventLabel *lab) override;
+	std::unique_ptr<VectorClock> calculatePrefixView(const EventLabel *lab) const override;
+	bool isDepTracking() const override;
+	void calculateSaved(EventLabel *lab);
+	void calculateViews(EventLabel *lab);
+	mutable const EventLabel *cexLab{};
+	void recomputeCacheCounters(const ExecutionGraph &g) const override;
+	void resetCacheCounters() const override;
+	void maybeDecreaseCacheCounters(const EventLabel *lab) const override;
+	void maybeIncreaseCacheCounters(const EventLabel *lab) const override;
+)";
+
+} // namespace
+
+enum class TraversalKind : std::uint8_t { DFS, SCC };
+
 struct DFSParameters {
 	using State = NFA::State;
-	using PrinterT = std::function<std::string(const std::string &)>;
+	using Hook = std::function<void(CodeBuilder &)>;
 
-	std::string name;				     // name of printed routine
-	std::string status;				     // name of status arrays
-	std::string params;				     // parameters of routine
-	std::string savedParam;				     // saved param of label printing
-	PrinterT createParams;				     // params of recursive calls
-	PrinterT atBegin{[&](auto &s) { return ""; }};	     // at node discovery
-	PrinterT atTreeE{[&](auto &s) { return ""; }};	     // at forward edge discovery
-	PrinterT atCyclE{[&](auto &s) { return ""; }};	     // at cyclic edge discovery
-	PrinterT atBackE{[&](auto &s) { return ""; }};	     // at backward edge discovery
-	PrinterT atForwE{[&](auto &s) { return ""; }};	     // at forward edge discovery
-	PrinterT atEnd{[&](auto &s) { return ""; }};	     // at node exit
-	PrinterT atFinal{[&](auto &s) { return ""; }};	     // at final node discovery
-	PrinterT atReturnFalse{[&](auto &s) { return ""; }}; // when a rec call returns false
+	std::string name;	 // name of printed routine
+	std::string status;	 // name of status arrays
+	std::string extraParams; // Additional parameters to the routine besides worklist
+	std::string savedParam;	 // saved param of label printing
 
-	std::unordered_map<State *, unsigned> ids{}; // state->id map
-	std::unordered_map<State *, bool> visit{};   // state->"has visit array"
+	Hook atBegin; // at node discovery
+	Hook atTreeE; // at tree-edge discovery
+	Hook atCyclE; // at cyclic-edge discovery
+	Hook atForwE; // at forward-edge discovery
+	Hook atEnd;   // at node exit
+	Hook atFinal; // at final-state discovery
+
+	std::vector<char> visit{}; // indexed by state ID: "has visit array"
 };
 
 GenMCPrinter::GenMCPrinter(const KatModule &module, const Config &config) : Printer(module, config)
@@ -308,11 +473,42 @@ GenMCPrinter::GenMCPrinter(const KatModule &module, const Config &config) : Prin
 		foutCpp = openFileForWriting(getConf().dir + "/" + className + ".cpp");
 		outCpp = &foutCpp;
 	}
+
+	/* CodeBuilders bind to the (now-wired) stream pointers. */
+	hppB_.emplace(*outHpp);
+	cppB_.emplace(*outCpp);
 }
 
 auto GenMCPrinter::shouldPrintSuccAcycChecks() const -> bool
 {
 	return !getModule().isDepTracking();
+}
+
+/* Emit "return true && a && b ... && z;" - one clause per indented line.
+ * Emits "return true;" if `clauses` is empty. Caller owns the surrounding
+ * block; this only emits at body-level + 1 below the current level. */
+static void emitConjunction(CodeBuilder &c, const std::vector<std::string> &clauses)
+{
+	c.line("return true");
+	for (auto &clause : clauses) {
+		auto _ = c.bump();
+		c.line("&& {}", clause);
+	}
+	c.line(";");
+}
+
+/* Emit "std::vector<DFSWorklistEntry> <var> = {{ {id, lab}, ... }};" populated
+ * from `accepting` (reversed, to match the recursion's discovery order). */
+template <std::ranges::range R>
+static void emitStartStates(CodeBuilder &c, std::string_view var, R &&accepting,
+			    std::string_view labVar)
+{
+	c.line("std::vector<DFSWorklistEntry> {} = {{", var);
+	for (auto &s : accepting | std::views::reverse) {
+		auto _ = c.bump();
+		c.line("{{ {}, {} }},", s->getId(), labVar);
+	}
+	c.line("}};").blank();
 }
 
 auto GenMCPrinter::usesRfInvInAcycChecks() const -> bool
@@ -334,162 +530,213 @@ auto GenMCPrinter::usesRfInvInAcycChecks() const -> bool
 	return result;
 }
 
-void GenMCPrinter::outputDFSCode(const NFA &nfa, const DFSParameters &params)
+/*
+ * Emits a worklist-based DFS. Entry form: {stateId, lab, isFinishing}.
+ * A node is pushed twice: once for discovery, and once more with
+ * isFinishing=true so that its post-order actions execute (e.g., mark it as "left").
+ */
+void GenMCPrinter::outputTraversal(const NFA &nfa, const DFSParameters &params, TraversalKind kind)
 {
-	assert(!params.name.empty() && !params.ids.empty() && !params.hasVisitArray.empty());
-	auto getStateFunName = [&](auto *s) {
-		return params.name + "_" + std::to_string(params.ids.at(s));
+	assert(!params.name.empty() && !params.visit.empty());
+
+	const bool isSCC = (kind == TraversalKind::SCC);
+	const auto stateArr = [&](auto *s) {
+		return std::format("{}_{}", params.status, s->getId());
 	};
-	auto getStateArrName = [&](auto *s) {
-		return params.status + "_" + std::to_string(params.ids.at(s));
+	const auto acceptingCount = std::format("{}Accepting", params.status);
+
+	/*
+	 * SCC cycle-detection guard: re-entering an on-stack ("entered") node closes
+	 * a cycle that is reported iff it passes through an accepting state (this node
+	 * is accepting) or encloses one (a higher accepting-count is now live).
+	 */
+	const auto sccEnteredGuard = [&](auto *s, std::string_view labVar) {
+		return std::format("status == NodeStatus::entered && ({} > "
+				   "{}.getCount({}->getStamp().get()) || {})",
+				   acceptingCount, stateArr(s), labVar,
+				   static_cast<int>(s->isAccepting()));
 	};
 
-	/* Declare all variables and methods */
-	for (auto &sUP : nfa.states()) {
-		hpp() << "\tmutable std::vector<NodeStatus> " << getStateArrName(&*sUP) << ";\n";
-	}
-	hpp() << "\n";
-	for (auto &sUP : nfa.states()) {
-		hpp() << "\tbool " << getStateFunName(&*sUP) << "(" << params.params << ") "
-		      << "const;\n";
-	}
-	hpp() << "\n";
+	/* SCC tracks both a count and a status; DFS only a status. */
+	const auto vecElem = isSCC ? "NodeVisitStatusVector" : "NodeStatusVector<uint32_t>";
 
-	/* Print the DFS routines */
-	for (auto &sUP : nfa.states()) {
-		cpp() << "bool " << className << "::" << getStateFunName(&*sUP) << "("
-		      << params.params << ") const \n"
-		      << "{\n"
-		      << "\tauto &g = *lab->getParent();\n"
-		      << "\n";
+	auto &h = hppB();
+	auto &c = cppB();
 
-		if (params.visit.at(&*sUP)) {
-			cpp() << "\tif (" << getStateArrName(&*sUP)
-			      << "[lab->getStamp().get()] != NodeStatus::unseen)\n"
-			      << "\t\treturn true;\n"
-			      << "\t" << getStateArrName(&*sUP)
-			      << "[lab->getStamp().get()] = NodeStatus::entered;\n";
-		}
+	/* Declarations in the .hpp */
+	for (auto &sUP : nfa.states())
+		h.line("mutable {} {};", vecElem, stateArr(&*sUP));
+	if (isSCC)
+		h.line("mutable uint32_t {};", acceptingCount);
+	h.blank();
+	h.line("bool {}Iterative(std::vector<DFSWorklistEntry> &worklist{}) const;", params.name,
+	       params.extraParams)
+		.blank();
 
-		cpp() << params.atBegin("lab") << "\n";
-		if (sUP->isStarting()) {
-			cpp() << params.atFinal("lab") << "\n";
-		}
-
-		for (auto &t : sUP->ins()) {
-			cpp() << "\t";
-			printTransLabel(cpp(), t, "pLab", "lab", params.savedParam);
-			cpp() << " {\n";
-			if (params.visit.at(t.dest)) {
-				cpp() << "\t\tauto status = " << getStateArrName(t.dest)
-				      << "[pLab->getStamp().get()];\n"
-				      << "\t\tif (status == NodeStatus::unseen) {\n";
+	/* Second (finishing) pop of a node: mark it `left` and run its exit actions. */
+	auto emitFinishingBranch = [&](NFA::State *s) {
+		{
+			auto ifFinScope = c.ifStmt("isFinishing");
+			if (params.visit[s->getId()]) {
+				if (isSCC) {
+					if (s->isStarting())
+						c.line("--{};", acceptingCount);
+					c.line("{}.set(lab->getStamp().get(), {}, "
+					       "NodeStatus::left);",
+					       stateArr(s), acceptingCount);
+				} else {
+					c.line("{}.setStatus(lab->getStamp().get(), "
+					       "NodeStatus::left);",
+					       stateArr(s));
+				}
 			}
-			cpp() << "\t\t\tif (!" << getStateFunName(t.dest) << "("
-			      << params.createParams("pLab") << ")){\n"
-			      << params.atReturnFalse("lab") << "\n"
-			      << "\t\t}\n"
-			      << "\t\t" << params.atTreeE("lab") << "\n";
-			if (params.visit.at(t.dest)) {
-				cpp() << "\t\t} else if (status == NodeStatus::entered) {\n"
-				      << params.atCyclE("pLab") << "\n"
-				      << "\t\t} else if (status == NodeStatus::left) {\n"
-				      << params.atForwE("pLab") << "\n"
-				      << "\t\t}\n";
-			}
-			cpp() << "\t}\n";
+			if (params.atEnd)
+				params.atEnd(c);
+			c.line("break;");
+		}
+		c.blank().blank();
+	};
+
+	/* First (discovery) pop: enter the node, schedule its finishing pop, and
+	 * recurse along incoming edges. States without a visit array keep no status. */
+	auto emitDiscovery = [&](NFA::State *s) {
+		auto emitEntryAction = [&](CodeBuilder &c) {
+			if (params.atBegin)
+				params.atBegin(c);
+			if (s->isStarting() && params.atFinal)
+				params.atFinal(c);
+		};
+
+		if (!params.visit[s->getId()]) {
+			emitEntryAction(c);
+			return;
 		}
 
-		cpp() << params.atEnd("lab") << "\n";
-		if (params.visit.at(&*sUP)) {
-			cpp() << "\t" << getStateArrName(&*sUP)
-			      << "[lab->getStamp().get()] = NodeStatus::left;\n";
+		c.line("auto status = {}.getStatus(lab->getStamp().get());", stateArr(s));
+		if (isSCC) {
+			{
+				auto ifUnseenScope = c.ifStmt("status == NodeStatus::unseen");
+				if (s->isStarting())
+					c.line("++{};", acceptingCount);
+				c.line("{}.{}(lab->getStamp().get(), {}, "
+				       "NodeStatus::entered);",
+				       stateArr(s), s->isStarting() ? "setIncr" : "set",
+				       acceptingCount);
+				c.line("worklist.emplace_back({}, lab, true /* "
+				       "isFinishing */);",
+				       s->getId());
+				emitEntryAction(c);
+			}
+			{
+				auto elifEnteredScope = c.elifStmt("{}", sccEnteredGuard(s, "lab"));
+				c.line("return false; /* cycle detected */");
+			}
+			{
+				auto elifLeftScope = c.elifStmt("status == NodeStatus::left");
+				c.line("break; /* already explored*/");
+			}
+			c.blank();
+		} else {
+			c.line("if (status != NodeStatus::unseen)")
+				.indented("break; /* already explored */")
+				.blank();
+			c.line("worklist.emplace_back({}, lab, true);", s->getId());
+			c.line("{}.setStatus(lab->getStamp().get(), "
+			       "NodeStatus::entered);",
+			       stateArr(s));
+			emitEntryAction(c);
 		}
-		cpp() << "\treturn true;\n"
-		      << "}\n"
-		      << "\n";
+		c.blank();
+	};
+
+	/* For each incoming edge, classify the neighbour by status (tree/cyclic/
+	 * forward edge) and fire the matching hook. */
+	auto emitTransitions = [&](NFA::State *s) {
+		c.line("[[maybe_unused]] auto &g = *lab->getParent();");
+
+		/* Print the transitions in a standard order */
+		std::vector<NFA::Transition> ts(s->ins().begin(), s->ins().end());
+		std::ranges::sort(ts, {}, [&](const auto &t) {
+			return std::pair{t.dest->getId(),
+					 printTransLabel(t, "pLab", "lab", params.savedParam)};
+		});
+		for (auto &t : ts) {
+			auto transScope =
+				c.kr("{}", printTransLabel(t, "pLab", "lab", params.savedParam));
+			if (!params.visit[t.dest->getId()]) {
+				c.line("worklist.emplace_back({}, pLab);", t.dest->getId());
+				if (params.atTreeE)
+					params.atTreeE(c);
+				continue;
+			}
+			c.line("auto status = {}.getStatus(pLab->getStamp().get());",
+			       stateArr(t.dest));
+			{
+				auto ifUnseenScope = c.ifStmt("status == NodeStatus::unseen");
+				c.line("worklist.emplace_back({}, pLab);", t.dest->getId());
+				if (params.atTreeE)
+					params.atTreeE(c);
+			}
+			if (params.atCyclE) {
+				auto elifEnteredScope =
+					isSCC ? c.elifStmt("{}", sccEnteredGuard(t.dest, "pLab"))
+					      : c.elifStmt("status == NodeStatus::entered");
+				params.atCyclE(c);
+			}
+			if (params.atForwE) {
+				auto elifLeftScope = c.elifStmt("status == NodeStatus::left");
+				params.atForwE(c);
+			}
+			c.blank();
+		}
+	};
+
+	/* iterative DFS traversal */
+	auto functionScope =
+		c.function("bool {}::{}Iterative(std::vector<DFSWorklistEntry> &worklist{}) const ",
+			   className, params.name, params.extraParams);
+	{
+		auto loopScope = c.whileLoop("!worklist.empty()");
+		c.line("auto [stateId, lab, isFinishing] = worklist.back();");
+		c.line("worklist.pop_back();");
+
+		/* Per-state definition in the .cpp */
+		auto switchScope = c.kr("switch(stateId)");
+		for (auto &sUP : nfa.states()) {
+			auto *s = &*sUP;
+			/* Cases are emitted dense 0..n by construction: IDs are state indices. */
+			auto caseScope = c.kr("case {}:", s->getId());
+			emitFinishingBranch(s);
+			emitDiscovery(s);
+			emitTransitions(s);
+			c.blank();
+			c.line("break;");
+		}
+		c.line("default:");
+		c.indented("UNREACHABLE();");
 	}
+
+	/* Finished the worklist, nothing found */
+	c.line("return true;");
 }
 
-void GenMCPrinter::outputSCCCode(const NFA &nfa, const DFSParameters &params)
+namespace {
+/* Returns P if CST is `[P];any;[P] <= id`, and nullptr otherwise */
+auto getCountedPredicate(const SubsetConstraint *cst) -> const CharRE *
 {
-	assert(!params.name.empty() && !params.ids.empty() && !params.hasVisitArray.empty());
-	auto getStateFunName = [&](auto *s) {
-		return params.name + "_" + std::to_string(params.ids.at(s));
-	};
-	auto getStateArrName = [&](auto *s) {
-		return params.status + "_" + std::to_string(params.ids.at(s));
-	};
-	auto acceptingCountName = params.status + "Accepting";
+	const auto *seqRE = dynamic_cast<const SeqRE *>(cst->getLHS());
+	if (seqRE == nullptr || seqRE->getNumKids() != 3 || !cst->getRHS()->isId())
+		return nullptr;
 
-	/* Declare all variables and methods */
-	for (auto &sUP : nfa.states()) {
-		hpp() << "\tmutable std::vector<NodeVisitStatus> " << getStateArrName(&*sUP)
-		      << ";\n";
-	}
-	hpp() << "\tmutable uint32_t " << acceptingCountName << ";\n"
-	      << "\n";
-	for (auto &sUP : nfa.states()) {
-		hpp() << "\tbool " << getStateFunName(&*sUP) << "(" << params.params << ") "
-		      << "const;\n";
-	}
-	hpp() << "\n";
+	const auto *predRE = dynamic_cast<const CharRE *>(seqRE->getKid(0));
+	if (predRE == nullptr || !predRE->getLabel().isPredicate() ||
+	    predRE->getLabel().isTruePredicate())
+		return nullptr;
 
-	/* Output SCC code */
-	for (auto &sUP : nfa.states()) {
-		cpp() << "bool " << className << "::" << getStateFunName(&*sUP) << "("
-		      << params.params << ") const \n"
-		      << "{\n"
-		      << "\tauto &g = *lab->getParent();\n"
-		      << "\n"
-		      << (sUP->isStarting() ? "\t++"s + acceptingCountName + ";\n"s : ""s);
-		if (params.visit.at(&*sUP)) {
-			cpp() << "\t" << getStateArrName(&*sUP) << "[lab->getStamp().get()] = { "
-			      << acceptingCountName << ", NodeStatus::entered };\n";
-		}
+	if (!seqRE->getKid(1)->isAnyRelation() || *seqRE->getKid(2) != *predRE)
+		return nullptr;
 
-		cpp() << params.atBegin("lab") << "\n";
-		if (sUP->isStarting()) {
-			cpp() << params.atFinal("lab") << "\n";
-		}
-
-		for (auto &t : sUP->ins()) {
-			cpp() << "\t";
-			printTransLabel(cpp(), t, "pLab", "lab", params.savedParam);
-			cpp() << " {\n";
-			if (params.visit.at(t.dest)) {
-				cpp() << "\t\tauto &node = " << getStateArrName(t.dest)
-				      << "[pLab->getStamp().get()];\n"
-				      << "\t\tif (node.status == NodeStatus::unseen) {\n";
-			}
-			cpp() << "\t\t\tif (!" << getStateFunName(t.dest) << "("
-			      << params.createParams("pLab") << ")){\n"
-			      << params.atReturnFalse("lab") << "\n"
-			      << "\t\t}\n"
-			      << "\t\t" << params.atTreeE("lab") << "\n";
-			if (params.visit.at(t.dest)) {
-				cpp() << "\t\t} else if (node.status == NodeStatus::entered && ("
-				      << acceptingCountName << " > node.count || "
-				      << std::to_string(t.dest->isAccepting()) << ")) {\n"
-				      << params.atCyclE("pLab") << "\n"
-				      << "\t\t\treturn false;\n"
-				      << "\t\t} else if (node.status == NodeStatus::left) {\n"
-				      << params.atForwE("pLab") << "\n"
-				      << "\t\t}\n";
-			}
-			cpp() << "\t}\n";
-		}
-
-		cpp() << (sUP->isStarting() ? "\t--"s + acceptingCountName + ";\n"s : ""s);
-		if (params.visit.at(&*sUP)) {
-			cpp() << "\t" << getStateArrName(&*sUP) << "[lab->getStamp().get()] = "
-			      << "{ " << acceptingCountName << ", NodeStatus::left };\n";
-		}
-		cpp() << params.atEnd("lab") << "\n";
-		cpp() << "\treturn true;\n"
-		      << "}\n"
-		      << "\n";
-	}
+	return predRE;
 }
 
 auto replaceAll(std::string &inout, const std::string &what, const std::string &with) -> std::size_t
@@ -502,180 +749,284 @@ auto replaceAll(std::string &inout, const std::string &what, const std::string &
 	}
 	return count;
 }
+} // namespace
 
-void GenMCPrinter::printPredSet(std::ostream &ostr, const std::string &arg,
-				const PredicateSet &preds)
+auto GenMCPrinter::printPredSet(const std::string &arg, const PredicateSet &preds) -> std::string
 {
-	if (preds.begin() == preds.end())
-		return;
+	if (preds.empty())
+		return "";
 
-	ostr << "if (true";
+	std::string out = "if (true";
 	for (const auto &p : preds.preds()) {
-		ostr << " && ";
-
+		out += " && ";
 		auto s = getModule().getTheory().getInfo(p).genmc;
 		replaceAll(s, "#", arg);
-		ostr << s;
+		out += s;
 	}
-	ostr << ")";
+	out += ")";
+	return out;
 }
 
-void GenMCPrinter::printRelation(std::ostream &ostr, const std::string &res, const std::string &arg,
-				 const std::optional<Relation> &r)
+auto GenMCPrinter::printRelation(const std::string &res, const std::string &arg,
+				 const std::optional<Relation> &r) -> std::string
 {
-	if (!r.has_value()) {
-		ostr << "if (auto " << res << " = " << arg << "; true)";
-		return;
-	}
+	if (!r.has_value())
+		return std::format("if (auto {} = {}; true)", res, arg);
 
 	if (r->isBuiltin()) {
 		const auto &rInfo = getModule().getTheory().getInfo(*r);
 		const auto &outs = getModule().getTheory().getInfo(*r).genmc;
 		const auto &s = r->isInverse() ? outs.pred : outs.succ;
-		// FIXME: Make iterators for ctrl/data/dep respect the current API
-		if (r->toBuiltin() == Relation::BuiltinID::data ||
-		    r->toBuiltin() == Relation::BuiltinID::ctrl ||
-		    r->toBuiltin() == Relation::BuiltinID::addr) {
-			ostr << "for (auto &p : " << s << "(g, " << arg << ")) if (auto *" << res
-			     << " = g.getEventLabel(p); true)";
-		} else if (rInfo.arity == RelArity::OneOne ||
-			   (rInfo.arity == RelArity::OneMany && r->isInverse()) ||
-			   (rInfo.arity == RelArity::ManyOne && !r->isInverse())) {
-			ostr << "if (auto " << res << " = " << s << "(g, " << arg << "); " << res
-			     << ")";
-		} else {
-			ostr << "for (auto &tmp : " << s << "(g, " << arg << ")) if (auto *" << res
-			     << " = &tmp; true)";
+		if (rInfo.arity == RelArity::OneOne ||
+		    (rInfo.arity == RelArity::OneMany && r->isInverse()) ||
+		    (rInfo.arity == RelArity::ManyOne && !r->isInverse())) {
+			return std::format("if (auto {} = g.{}({}); {})", res, s, arg, res);
 		}
-		return;
+		return std::format("for (auto &tmp : g.{}({})) if (auto *{} = &tmp; true)", s, arg,
+				   res);
 	}
 
 	// No view indexes should appear when printing nfas.
 	// if they do appear, it's from rec views => these are left rec
 	// => just yield the same event (next state is guaranteed to be starting)
-	if (isMutRecRelation(r->getID())) {
-		ostr << "if (auto " << res << " = " << arg << "; true)";
-		return;
-	}
+	if (isMutRecRelation(r->getID()))
+		return std::format("if (auto {} = {}; true)", res, arg);
 
 	// FIXME: assumes preds + immediate
 	assert(getModule().getTheory().hasInfo(*r));
 	const auto &outs = getModule().getTheory().getInfo(*r).genmc;
 	const auto &s = r->isInverse() ? outs.pred : outs.succ;
-	ostr << "if (auto " << res << " = " << s << "(g, " << arg << "); " << res << ")";
-	return;
+	return std::format("if (auto {} = g.{}({}); {})", res, s, arg, res);
 }
 
-void GenMCPrinter::printTransLabel(std::ostream &ostr, const NFA::Transition &t,
-				   const std::string &res, const std::string &arg,
-				   const std::string &saveRes)
+auto GenMCPrinter::printTransLabel(const NFA::Transition &t, const std::string &res,
+				   const std::string &arg, const std::string &saveRes)
+	-> std::string
 {
-	printPredSet(ostr, arg, t.label.getPreChecks());
-	printRelation(ostr, res, arg, t.label.getRelation());
-	printPredSet(ostr, res, t.label.getPostChecks());
+	std::string out;
+	out += printPredSet(arg, t.label.getPreChecks());
+	out += printRelation(res, arg, t.label.getRelation());
+	out += printPredSet(res, t.label.getPostChecks());
 
 	/* If the destination is starting, update the saved result */
 	if (!t.dest->isStarting() || saveRes.empty())
-		return;
+		return out;
 
 	if (isMutRecRelation(t.label.getRelation()->getID())) {
-		ostr << "if (" << saveRes << ".update(" << res << "->view("
-		     << getPrintedIdx(getMutRecRelationDeclaration(t.label.getRelation()->getID()))
-		     << ")); true)";
+		out += std::format("if ({}.update({}->view({})); true)", saveRes, res,
+				   getPrintedIdx(getMutRecRelationDeclaration(
+					   t.label.getRelation()->getID())));
 	} else {
-		ostr << "if (" << saveRes << ".updateIdx(" << res << "->getPos()); true)";
+		out += std::format("if ({}.updateIdx({}->getPos()); true)", saveRes, res);
 	}
+	return out;
 }
 
 void GenMCPrinter::printHeader()
 {
-	/* Print a copyright notice in both HPP and CPP */
-	hpp() << genmcCopyright << "\n" << katerNotice << "\n";
-	cpp() << genmcCopyright << "\n" << katerNotice << "\n";
+	auto &h = hppB();
+	auto &c = cppB();
 
-	/* Print all declarations in the HPP file */
-	hpp() << "#ifndef " << guardName << "\n"
-	      << "#define " << guardName << "\n"
-	      << "\n"
-	      << "#include \"ExecutionGraph/Consistency/ConsistencyChecker.hpp\"\n"
-	      << "#include \"ExecutionGraph/EventLabel.hpp\"\n"
-	      << "#include <cstdint>\n"
-	      << "#include <vector>\n"
-	      << "\n"
-	      << "class " << className << " : public ConsistencyChecker {\n"
-	      << "\n"
-	      << "private:\n"
-	      << "\tenum class NodeStatus : unsigned char { unseen, entered, "
-		 "left };\n"
-	      << "\n"
-	      << "\tstruct NodeVisitStatus {\n"
-	      << "\t\tNodeVisitStatus() = default;\n"
-	      << "\t\tNodeVisitStatus(uint32_t c, NodeStatus s) : "
-		 "count(c), "
-		 "status(s) {}\n"
-	      << "\t\tuint32_t count{};\n"
-	      << "\t\tNodeStatus status{};\n"
-	      << "\t};\n"
-	      << "\n"
-	      << "public:\n"
-	      << "\t" << className << "(const Config *conf) : ConsistencyChecker(conf) {};\n"
-	      << "\n"
-	      << "private:\n"
-	      << "\tbool isConsistent(const EventLabel *lab) const override;\n"
-	      << "\tbool isConsistent(const ExecutionGraph &g) const override;\n"
-	      << "\tbool isCoherentRelinche(const ExecutionGraph &g) const override;\n"
-	      << "\tstd::optional<VerificationError> checkErrors(const EventLabel *lab, const "
-		 "EventLabel *&race) const;\n"
-	      << "\tstd::vector<VerificationError> checkWarnings(const EventLabel *lab, const "
-		 "VSet<VerificationError> &reported, std::vector<const EventLabel *> &races) "
-		 "const override;\n"
-	      << "\tstd::vector<EventLabel *> getCoherentStores(ReadLabel *rLab) override;\n"
-	      << "\tvoid filterCoherentRevisits(WriteLabel *sLab, std::vector<ReadLabel *> &ls) "
-		 "override;\n"
-	      << "\tstd::vector<EventLabel *> getCoherentPlacings(WriteLabel *sLab) override;\n"
-	      << "\tvoid updateMMViews(EventLabel *lab) override;\n"
-	      << "\tstd::unique_ptr<VectorClock> calculatePrefixView(const EventLabel *lab) const "
-		 "override;\n"
-	      << "\tbool isDepTracking() const;\n"
-	      << "\tvoid calculateSaved(EventLabel *lab);\n"
-	      << "\tvoid calculateViews(EventLabel *lab);\n"
-	      << "\tmutable const EventLabel *cexLab{};\n"
-	      << "\n";
+	/* Copyright notice in both HPP and CPP */
+	h.raw(genmcCopyright).blank().raw(katerNotice).blank();
+	c.raw(genmcCopyright).blank().raw(katerNotice).blank();
 
-	/* Print all includes in the CPP file */
-	cpp() << "#include \"" << className << ".hpp\"\n"
-	      << "#include \"ADT/VSet.hpp\"\n"
-	      << "#include "
-	      << (getModule().isDepTracking() ? "\"ADT/DepView.hpp\"\n"s : "\"ADT/View.hpp\"\n"s)
-	      << "#include \"ExecutionGraph/ExecutionGraph.hpp\"\n"
-	      << "#include \"ExecutionGraph/GraphIterators.hpp\"\n"
-	      << "#include \"ExecutionGraph/GraphUtils.hpp\"\n"
-	      << "#include \"Verification/Config.hpp\"\n"
-	      << "#include \"Verification/VerificationError.hpp\"\n"
-	      << "\n";
+	/* HPP declarations */
+	auto cHeaderDeclarations = std::string(commonHeaderDeclarations);
+	replaceAll(cHeaderDeclarations, "#CLASS#", className);
+	replaceAll(cHeaderDeclarations, "#GUARDNAME#", guardName);
+	h.raw(cHeaderDeclarations).blank();
+
+	/* CPP includes */
+	const auto *viewHdr = getModule().isDepTracking() ? R"("genmc/ADT/DepView.hpp")"
+							  : R"("genmc/ADT/View.hpp")";
+	c.line("// NOLINTBEGIN")
+		.line(R"(#include "{}.hpp")", className)
+		.line(R"(#include "genmc/ADT/VSet.hpp")")
+		.line("#include {}", viewHdr)
+		.line(R"(#include "genmc/Execution/ExecutionGraph.hpp")")
+		.line(R"(#include "genmc/Execution/GraphUtils.hpp")")
+		.line(R"(#include "genmc/Verification/Config.hpp")")
+		.line(R"(#include "genmc/Verification/VerificationError.hpp")")
+		.blank()
+		.line("#include <algorithm>")
+		.blank();
+}
+
+void GenMCPrinter::printConsistency(
+	const std::unordered_map<Statement *, std::string> &exportedNames)
+{
+	auto &module = getModule();
+	auto &theory = module.getTheory();
+	auto &hpp = hppB();
+	auto &cpp = cppB();
+
+	auto collectAcycSubset = [&](std::string_view callArg) {
+		std::vector<std::string> clauses;
+		for (auto &stmt : module.exports()) {
+			auto *acycCst =
+				dynamic_cast<const AcyclicConstraint *>(stmt->getConstraint());
+			if (acycCst && !stmt->isExtra())
+				clauses.push_back(
+					std::format("{}({})", exportedNames.at(&*stmt), callArg));
+		}
+		// FIXME: for equality
+		for (auto &stmt : module.exports()) {
+			auto *subCst =
+				dynamic_cast<const SubsetConstraint *>(stmt->getConstraint());
+			if (subCst && !stmt->isExtra())
+				clauses.push_back(
+					std::format("{}({})", exportedNames.at(&*stmt), callArg));
+		}
+		return clauses;
+	};
+
+	/* incremental version */
+	{
+		auto fun = cpp.function(
+			"bool {}::isConsistent([[maybe_unused]] const EventLabel *lab) const",
+			className);
+		cpp.blank();
+		emitConjunction(cpp, collectAcycSubset("lab"));
+	}
+
+	/* full version */
+	{
+		auto fun = cpp.function(
+			"bool {}::isConsistent([[maybe_unused]] const ExecutionGraph &g) const",
+			className);
+		cpp.blank();
+		emitConjunction(cpp, collectAcycSubset("g"));
+	}
+
+	/* coherence (special treatment) */
+	{
+		auto fun = cpp.function(
+			"bool {}::isCoherentRelinche(const ExecutionGraph &g) const", className);
+		cpp.blank();
+		std::vector<std::string> clauses;
+		for (auto &stmt : module.exports()) {
+			auto *cohCst =
+				dynamic_cast<const CoherenceConstraint *>(stmt->getConstraint());
+			if (!cohCst)
+				continue;
+			assert(!stmt->isExtra());
+			clauses.emplace_back("visitCoherenceRelinche(g)");
+		}
+		emitConjunction(cpp, clauses);
+	}
+
+	/* print the extras */
+	for (auto &stmt : module.exports()) {
+		if (stmt->isExtra()) {
+			hpp.line("bool {}(const EventLabel *lab) {{ return {}(lab); }}",
+				 *stmt->getNameOfExtra(), exportedNames.at(&*stmt));
+		}
+	}
+	hpp.blank();
+
+	/* pporf-before getter */
+	auto pporfNFA = module.createPPORF()->toNFA();
+	simplify(pporfNFA, theory);
+	printPPoRfHpp(pporfNFA, module.isDepTracking());
+	printPPoRfCpp(pporfNFA, module.isDepTracking());
+	{
+		auto fun = cpp.function(
+			"std::unique_ptr<VectorClock> {}::calculatePrefixView(const EventLabel "
+			"*lab) const",
+			className);
+		cpp.line("return std::make_unique<{}>(calcPPoRfBefore(lab));",
+			 module.isDepTracking() ? "DepView" : "View");
+	}
+}
+
+void GenMCPrinter::printCacheCounters()
+{
+	auto &cpp = cppB();
+
+	auto counterName = [](const CacheCounter &cacheC) -> std::string {
+		return "cacheCounter" + cacheC.prefix;
+	};
+
+	/* Recomputing all cache counters */
+	{
+		auto fun = cpp.function("void {}::recomputeCacheCounters([[maybe_unused]] const "
+					"ExecutionGraph &g) const",
+					className);
+		for (const auto &cacheC : cacheCounters)
+			cpp.line("recompute{}(g);", cacheC.prefix);
+	}
+
+	/* Resetting all cache counters */
+	{
+		auto fun = cpp.function("void {}::resetCacheCounters() const", className);
+		for (const auto &cacheC : cacheCounters)
+			cpp.line("{} = -1;", counterName(cacheC));
+	}
+
+	/* Decreasing matching cache counters */
+	{
+		auto fun =
+			cpp.function("void {}::maybeDecreaseCacheCounters([[maybe_unused]] const "
+				     "EventLabel *lab) const",
+				     className);
+		for (const auto &cacheC : cacheCounters) {
+			auto ifPred = cpp.kr("{}", cacheC.predCheck);
+			cpp.line("VERIFY({} > 0);", counterName(cacheC));
+			cpp.line("{} -= 1;", counterName(cacheC));
+		}
+	}
+
+	/* Increasing matching cache counters */
+	{
+		auto fun =
+			cpp.function("void {}::maybeIncreaseCacheCounters([[maybe_unused]] const "
+				     "EventLabel *lab) const",
+				     className);
+		for (const auto &cacheC : cacheCounters) {
+			auto ifPred = cpp.kr("{}", cacheC.predCheck);
+			cpp.line("VERIFY({} >= 0);", counterName(cacheC));
+			cpp.line("{} += 1;", counterName(cacheC));
+		}
+	}
 }
 
 void GenMCPrinter::printFooter()
 {
-	/* End the class on the HPP file */
-	hpp() << "\n"
-	      << "};\n"
-	      << "\n"
-	      << "#endif /* " << guardName << " */\n";
+	hppB().blank()
+		.line("}};")
+		.blank()
+		.line("// NOLINTEND")
+		.blank()
+		.line("#endif /* {} */", guardName);
+	cppB().line("// NOLINTEND");
 }
 
-void GenMCPrinter::output()
+// NOLINTNEXTLINE(readability-function-cognitive-complexity): pre-existing size
+auto GenMCPrinter::output() -> bool
 {
 	printHeader();
 
+	auto exported = true;
 	auto &module = getModule();
 	auto &theory = module.getTheory();
+	auto &h = hppB();
+	auto &c = cppB();
 
-	cpp() << "bool " << className << "::isDepTracking() const\n"
-	      << "{\n"
-	      << "\treturn " << module.isDepTracking() << ";\n"
-	      << "}\n"
-	      << "\n";
+	/*
+	 * The class body straddles printHeader() / printFooter(). We hold an
+	 * outer bump for the duration of output()'s body so that every
+	 * member-declaration emission via h.line("...") gets the implicit
+	 * one-tab class-body indent. The scope ends before printFooter so the
+	 * closing `};` and `#endif` sit at column 0.
+	 */
+	std::optional<CodeBuilder::Scope> hppClassBody;
+	hppClassBody.emplace(h, ""); // bump-style scope (no close emit)
+
+	{
+		auto fn = c.function("bool {}::isDepTracking() const", className);
+		c.line("return {:d};", module.isDepTracking());
+	}
 
 	/************************************************************
 	** calculators, views, etc
@@ -685,6 +1036,8 @@ void GenMCPrinter::output()
 	auto vc = 0U;
 	auto sc = 0U;
 	std::unordered_map<Statement *, std::string> exportedNames;
+
+	/* First, keep mappings from recursive relations (these are used in regexps) */
 	for (auto &let : module.lets()) {
 		if (dynamic_cast<NoSavedExp *>(let->getSaved()))
 			continue;
@@ -698,6 +1051,11 @@ void GenMCPrinter::output()
 		if (auto *mutRecRE = dynamic_cast<const MutRecRE *>(let->getRE())) {
 			mutRecRelToLetMap.emplace(mutRecRE->getRelation().getID(), &*let);
 		}
+	}
+	/* Then, export calculators */
+	for (auto &let : module.lets()) {
+		if (dynamic_cast<NoSavedExp *>(let->getSaved()))
+			continue;
 
 		// Print the calculation routines
 		auto exportedNameSuffix = "Calc" + std::to_string(let->getID());
@@ -709,45 +1067,41 @@ void GenMCPrinter::output()
 		// GenMC-specific code to run)
 		auto exportedName = "check" + exportedNameSuffix;
 		exportedNames[&*let] = exportedName;
-		hpp() << "\tauto " << exportedName << "(const EventLabel *lab) const;\n";
-		cpp() << "auto " << className << "::" << exportedName
-		      << "(const EventLabel *lab) const\n"
-		      << "{\n"
-		      << "\tauto &g = *lab->getParent();\n"
-		      << "\n";
-		cpp() << "\treturn visit" << exportedNameSuffix << "(lab);\n}\n";
+		h.line("auto {}(const EventLabel *lab) const;", exportedName);
+		{
+			auto fn = c.function("auto {}::{}(const EventLabel *lab) const", className,
+					     exportedName);
+			c.line("[[maybe_unused]] auto &g = *lab->getParent();").blank();
+			c.line("return visit{}(lab);", exportedNameSuffix);
+		}
 	}
-	cpp() << "void " << className << "::calculateSaved(EventLabel *lab)\n"
-	      << "{\n";
-	for (auto &let : module.lets()) {
-		if (!dynamic_cast<SetExp *>(let->getSaved()))
-			continue;
-
-		cpp() << "\tlab->addSaved(" << exportedNames[&*let] << "(lab));\n";
+	{
+		auto fn = c.function("void {}::calculateSaved([[maybe_unused]] EventLabel *lab)",
+				     className);
+		for (auto &let : module.lets()) {
+			if (!dynamic_cast<SetExp *>(let->getSaved()))
+				continue;
+			c.line("lab->addSaved({}(lab));", exportedNames[&*let]);
+		}
 	}
-	cpp() << "}\n"
-	      << "\n";
-	cpp() << "void " << className << "::calculateViews(EventLabel *lab)\n"
-	      << "{\n"
-	      << "\tlab->setViews({});\n";
-	for (auto &let : module.lets()) {
-		if (!dynamic_cast<ViewExp *>(let->getSaved()))
-			continue;
-		if (let->hasCodeToPrint())
-			cpp() << *let->getCodeToPrint() << "\n";
-		cpp() << "\tlab->addView(" << exportedNames[&*let] << "(lab));\n";
+	{
+		auto fn = c.function("void {}::calculateViews(EventLabel *lab)", className);
+		c.line("lab->setViews({{}});");
+		for (auto &let : module.lets()) {
+			if (!dynamic_cast<ViewExp *>(let->getSaved()))
+				continue;
+			if (let->hasCodeToPrint())
+				c.raw(*let->getCodeToPrint()).raw("\n");
+			c.line("lab->addView({}(lab));", exportedNames[&*let]);
+		}
 	}
-	cpp() << "}\n"
-	      << "\n";
-	cpp() << "void " << className << "::updateMMViews(EventLabel *lab)\n"
-	      << "{\n"
-	      << "\tcalculateViews(lab);\n"
-	      << "\tcalculateSaved(lab);\n";
-	if (!module.isDepTracking()) { /* we can optimize the calculation */
-		cpp() << "\tlab->setPrefixView(calculatePrefixView(lab));\n";
+	{
+		auto fn = c.function("void {}::updateMMViews(EventLabel *lab)", className);
+		c.line("calculateViews(lab);").line("calculateSaved(lab);");
+		if (!module.isDepTracking()) { /* we can optimize the calculation */
+			c.line("lab->setPrefixView(calculatePrefixView(lab));");
+		}
 	}
-	cpp() << "}\n"
-	      << "\n";
 
 	// FIXME: Somewhere sanitize exports (unless has to be <= )
 
@@ -775,10 +1129,9 @@ void GenMCPrinter::output()
 					ecst.getRHS()->clone(), ecst.getLHS()->clone(),
 					ecst.sameEnds(), ecst.rotated());
 				printSubset(&*convC, exportedNameSuffix + "Converse");
-				cpp() << "bool visit" + exportedNameSuffix
-				      << "(const EventLabel *lab){ return visit"
-				      << exportedNameSuffix + "Direct(lab) && visit "
-				      << exportedNameSuffix << "Converse(lab); }";
+				c.line("bool visit{}(const EventLabel *lab) {{ return "
+				       "visit{}Direct(lab) && visit{}Converse(lab); }}",
+				       exportedNameSuffix, exportedNameSuffix, exportedNameSuffix);
 			},
 			[&](const WarningConstraint &wcst) {
 				counterexample = true;
@@ -791,8 +1144,10 @@ void GenMCPrinter::output()
 				printWarning(&wcst, exportedNameSuffix);
 			},
 			[&](const CoherenceConstraint &ccst) { printCoherence(&ccst); },
+			/* Unreachable today: the grammar admits totality only in "assume" */
 			[&](const TotalityConstraint &tcst) {
-				std::cerr << "[Error] Cannot export totality constraint.\n";
+				LOG(VerbosityLevel::Error) << "cannot export totality constraint";
+				exported = false;
 			});
 		visitor(*stmt->getConstraint());
 
@@ -810,178 +1165,90 @@ void GenMCPrinter::output()
 		// clause, as well as GenMC-specific code
 
 		//  Incremental version:
-		hpp() << "\tbool " << exportedName << "(const EventLabel *lab) const;\n";
-		cpp() << "bool " << className << "::" << exportedName
-		      << "(const EventLabel *lab) const\n"
-		      << "{\n"
-		      << "\tauto &g = *lab->getParent();\n"
-		      << "\n";
-		if (stmt->hasCodeToPrint())
-			cpp() << *stmt->getCodeToPrint() << "\n";
-		if (stmt->getUnless())
-			cpp() << "\tif (visitUnless" << exportedNameSuffix << "(lab))\n"
-			      << "\t\treturn true;\n"
-			      << "\n";
-		cpp() << "\treturn visit" << exportedNameSuffix << "(lab);\n}\n";
+		h.line("bool {}(const EventLabel *lab) const;", exportedName);
+		{
+			auto fn = c.function("bool {}::{}(const EventLabel *lab) const", className,
+					     exportedName);
+			c.line("[[maybe_unused]] auto &g = *lab->getParent();").blank();
+			if (stmt->hasCodeToPrint())
+				c.raw(*stmt->getCodeToPrint()).raw("\n");
+			if (stmt->getUnless()) {
+				c.line("if (visitUnless{}(lab))", exportedNameSuffix)
+					.indented("return true;")
+					.blank();
+			}
+			c.line("return visit{}(lab);", exportedNameSuffix);
+		}
 
 		//  Full version (currently acyclicity only):
 		if (!dynamic_cast<const AcyclicConstraint *>(stmt->getConstraint()))
 			continue;
-		hpp() << "\tbool " << exportedName << "(const ExecutionGraph &g) const;\n";
-		cpp() << "bool " << className << "::" << exportedName
-		      << "(const ExecutionGraph &g) const\n"
-		      << "{\n"
-		      << "\treturn visit" << exportedNameSuffix << "Full(g);\n}\n";
-	}
-
-	cpp() << "std::optional<VerificationError> " << className
-	      << "::checkErrors(const EventLabel *lab, const EventLabel *&race) const\n"
-	      << "{";
-	for (auto &stmt : module.exports()) {
-		auto *errorCst = dynamic_cast<const ErrorConstraint *>(stmt->getConstraint());
-		if (!errorCst) {
-			continue;
-		}
-		cpp() << "\n\tif (!" << exportedNames[&*stmt] << "(lab)) {"
-		      << "\n\t\trace = cexLab;"
-		      << "\n\t\treturn {VerificationError::" << errorCst->getWarningName() << "};"
-		      << "\n\t}\n";
-	}
-	cpp() << "\n\treturn {};\n"
-	      << "}\n"
-	      << "\n";
-	cpp() << "std::vector<VerificationError> " << className
-	      << "::checkWarnings(const EventLabel *lab, const VSet<VerificationError> "
-		 "&seenWarnings, std::vector<const EventLabel *> &racyLabs) const\n"
-	      << "{\n"
-	      << "\tstd::vector<VerificationError> result;\n";
-	for (auto &stmt : module.exports()) {
-		auto *warnCst = dynamic_cast<const WarningConstraint *>(stmt->getConstraint());
-		if (!warnCst || dynamic_cast<const ErrorConstraint *>(warnCst)) {
-			continue;
-		}
-		cpp() << "\n\tif (seenWarnings.count(VerificationError::"
-		      << warnCst->getWarningName() << ") == 0 && !" << exportedNames[&*stmt]
-		      << "(lab)) {"
-		      << "\n\t\tracyLabs.push_back(cexLab);"
-		      << "\n\t\tresult.push_back(VerificationError::" << warnCst->getWarningName()
-		      << ");"
-		      << "\n\t}\n";
-	}
-	cpp() << "\n\treturn result;\n"
-	      << "}\n"
-	      << "\n";
-
-	/************************************************************
-	 * consistency
-	 ************************************************************/
-
-	/* incremental version */
-	cpp() << "bool " << className << "::isConsistent(const EventLabel *lab) const\n"
-	      << "{\n"
-	      << "\n\treturn true";
-	for (auto &stmt : module.exports()) {
-		auto *acycCst = dynamic_cast<const AcyclicConstraint *>(stmt->getConstraint());
-		if (!acycCst) {
-			continue;
-		}
-		if (!stmt->isExtra())
-			cpp() << "\n\t\t&& " << exportedNames[&*stmt] << "(lab)";
-	}
-	// FIXME: for equality
-	for (auto &stmt : module.exports()) {
-		auto *subCst = dynamic_cast<const SubsetConstraint *>(stmt->getConstraint());
-		if (!subCst) {
-			continue;
-		}
-		if (!stmt->isExtra())
-			cpp() << "\n\t\t&& " << exportedNames[&*stmt] << "(lab)";
-	}
-	cpp() << ";\n"
-	      << "}\n"
-	      << "\n";
-
-	/* full version */
-	cpp() << "bool " << className << "::isConsistent(const ExecutionGraph &g) const\n"
-	      << "{\n"
-	      << "\n\treturn true";
-	for (auto &stmt : module.exports()) {
-		auto *acycCst = dynamic_cast<const AcyclicConstraint *>(stmt->getConstraint());
-		if (!acycCst) {
-			continue;
-		}
-		if (!stmt->isExtra())
-			cpp() << "\n\t\t&& " << exportedNames[&*stmt] << "(g)";
-	}
-	// FIXME: for equality
-	for (auto &stmt : module.exports()) {
-		auto *subCst = dynamic_cast<const SubsetConstraint *>(stmt->getConstraint());
-		if (!subCst) {
-			continue;
-		}
-		if (!stmt->isExtra())
-			cpp() << "\n\t\t&& " << exportedNames[&*stmt] << "(g)";
-	}
-	cpp() << ";\n"
-	      << "}\n"
-	      << "\n";
-
-	/* coherence (special treatment) */
-	cpp() << "bool " << className << "::isCoherentRelinche(const ExecutionGraph &g) const\n"
-	      << "{\n"
-	      << "\n\treturn true";
-	for (auto &stmt : module.exports()) {
-		auto *cohCst = dynamic_cast<const CoherenceConstraint *>(stmt->getConstraint());
-		if (!cohCst) {
-			continue;
-		}
-		assert(!stmt->isExtra());
-		cpp() << "\n\t\t&& visitCoherenceRelinche(g)";
-	}
-	cpp() << ";\n"
-	      << "}\n"
-	      << "\n";
-
-	/* print the extras */
-	for (auto &stmt : module.exports()) {
-		if (stmt->isExtra()) {
-			hpp() << "\tbool " << *stmt->getNameOfExtra()
-			      << "(const EventLabel *lab) { return " << exportedNames[&*stmt]
-			      << "(lab); }\n";
+		h.line("bool {}(const ExecutionGraph &g) const;", exportedName);
+		{
+			auto fn = c.function("bool {}::{}(const ExecutionGraph &g) const",
+					     className, exportedName);
+			c.line("return visit{}Full(g);", exportedNameSuffix);
 		}
 	}
-	hpp() << "\n";
 
-	/* pporf-before getter */
-	auto pporfNFA = module.createPPORF()->toNFA();
-	simplify(pporfNFA, theory);
-	printPPoRfHpp(pporfNFA, module.isDepTracking());
-	printPPoRfCpp(pporfNFA, module.isDepTracking());
-	cpp() << "std::unique_ptr<VectorClock> " << className
-	      << "::calculatePrefixView(const EventLabel *lab) const\n"
-	      << "{\n"
-	      << "\treturn std::make_unique<" << (module.isDepTracking() ? "DepView" : "View")
-	      << ">(calcPPoRfBefore(lab));\n"
-	      << "}\n"
-	      << "\n";
+	{
+		auto fn = c.function(
+			"std::optional<VerificationError> {}::checkErrors([[maybe_unused]] const "
+			"EventLabel *lab, [[maybe_unused]] const EventLabel *&race) const",
+			className);
+		for (auto &stmt : module.exports()) {
+			auto *errorCst =
+				dynamic_cast<const ErrorConstraint *>(stmt->getConstraint());
+			if (!errorCst)
+				continue;
+			{
+				auto ifScope = c.ifStmt("!{}(lab)", exportedNames[&*stmt]);
+				c.line("race = cexLab;")
+					.line("return {{VerificationError::{}}};",
+					      errorCst->getWarningName());
+			}
+			c.blank().blank();
+		}
+		c.line("return {{}};");
+	}
 
+	{
+		auto fn = c.function(
+			"std::vector<VerificationError> {}::checkWarnings(const EventLabel *lab, "
+			"const VSet<VerificationError> &seenWarnings, std::vector<const EventLabel "
+			"*> &racyLabs) const",
+			className);
+		c.line("std::vector<VerificationError> result;").blank();
+		for (auto &stmt : module.exports()) {
+			auto *warnCst =
+				dynamic_cast<const WarningConstraint *>(stmt->getConstraint());
+			if (!warnCst || dynamic_cast<const ErrorConstraint *>(warnCst))
+				continue;
+			{
+				auto ifScope = c.ifStmt("seenWarnings.count(VerificationError::{})"
+							" == 0 && !{}(lab)",
+							warnCst->getWarningName(),
+							exportedNames[&*stmt]);
+				c.line("racyLabs.push_back(cexLab);")
+					.line("result.push_back(VerificationError::{});",
+					      warnCst->getWarningName());
+			}
+			c.blank().blank();
+		}
+		c.line("return result;");
+	}
+
+	printConsistency(exportedNames);
+	printCacheCounters();
+
+	hppClassBody.reset();
 	printFooter();
+	return exported;
 }
 
-template <typename ITER>
-auto assignStateIDs(ITER &&begin, ITER &&end) -> std::unordered_map<NFA::State *, unsigned>
+auto GenMCPrinter::getStateVisitAssignment(const NFA &nfa) const -> std::vector<char>
 {
-	std::unordered_map<NFA::State *, unsigned> result;
-
-	auto i = 0U;
-	std::for_each(begin, end, [&](auto &s) { result[&*s] = i++; });
-	return result;
-}
-
-auto GenMCPrinter::getStateVisitAssignment(const NFA &nfa) const
-	-> std::unordered_map<NFA::State *, bool>
-{
-	std::unordered_map<NFA::State *, bool> result;
+	std::vector<char> result(nfa.getNumStates(), 0);
 
 	/* Helper that determines whether a state has any "outpoints" (i.e.,
 	 * whether the edges leaving a state lead anywhere) */
@@ -998,7 +1265,8 @@ auto GenMCPrinter::getStateVisitAssignment(const NFA &nfa) const
 	};
 
 	for (auto &sUP : nfa.states()) {
-		result[&*sUP] = getConf().emitVisitArrays ? true : shouldHaveVisitArray(&*sUP);
+		result[sUP->getId()] =
+			static_cast<char>(getConf().emitVisitArrays || shouldHaveVisitArray(&*sUP));
 	}
 	return result;
 }
@@ -1011,159 +1279,191 @@ void GenMCPrinter::printSubset(const SubsetConstraint *subCst, std::string prefi
 	auto nfaRHS = subCst->getRHS()->toNFA();
 	simplify(nfaRHS, getModule().getTheory());
 
-	/* Create a config for both LHS and RHS */
+	auto &hpp = hppB();
+	auto &cpp = cppB();
+
+	/* Constraints counting predicate instances get ad-hoc counting code */
+	if (const auto *countedRE = getCountedPredicate(subCst); countedRE != nullptr) {
+		std::string counterName = "cacheCounter" + prefix;
+		const auto &predSet = countedRE->getLabel().getPreChecks();
+		std::string predCheck = printPredSet("lab", predSet);
+
+		hpp.line("mutable int {} = 0;", counterName);
+		hpp.line("void recompute{}(const ExecutionGraph &g) const;", prefix);
+		{
+			auto fun =
+				cpp.function("void {}::recompute{}(const ExecutionGraph &g) const",
+					     className, prefix);
+			{
+				auto lam = cpp.lambda("auto isMatchingLabel = [](const auto &l)");
+				cpp.line("auto *lab = &l;");
+				cpp.line("{}", predCheck);
+				cpp.indented("return true;");
+				cpp.line("return false;");
+			}
+			cpp.line("{} = std::count_if(g.label_begin(), g.label_end(), "
+				 "isMatchingLabel);",
+				 counterName);
+		}
+
+		hpp.line("bool visit{}(const EventLabel *lab) const;", prefix);
+		{
+			auto fun = cpp.function("bool {}::visit{}(const EventLabel *lab) const",
+						className, prefix);
+			cpp.line("auto &g = *lab->getParent();");
+			cpp.line("if ({} == -1) /* Cache is empty */", counterName);
+			cpp.indented("recompute{}(g);", prefix);
+
+			cpp.line("return {} < 2;", counterName);
+		}
+
+		cacheCounters.push_back({prefix, predCheck});
+		return;
+	}
+
+	auto markAccepting = [](std::string statusName) -> DFSParameters::Hook {
+		return [s = std::move(statusName)](CodeBuilder &c) {
+			c.line("{}Accepting[lab->getStamp().get()] = true;", s);
+		};
+	};
 	DFSParameters paramsLHS = {
 		.name = "visitLHS" + prefix,
 		.status = "visitedLHS" + prefix,
-		.params = "const EventLabel *lab",
 		.savedParam = "",
-		.createParams = [&](auto &s) { return s; },
-		.atFinal =
-			[&](auto &s) {
-				return paramsLHS.status +
-				       "Accepting[lab->getStamp().get()] = true;";
-			},
-		.atReturnFalse = [&](auto &s) { return "\t\t\treturn false;"; },
-		.ids = assignStateIDs(nfaLHS.states_begin(), nfaLHS.states_end()),
+		.atFinal = markAccepting("visitedLHS" + prefix),
 		.visit = getStateVisitAssignment(nfaLHS),
 	};
 	DFSParameters paramsRHS = {
 		.name = "visitRHS" + prefix,
 		.status = "visitedRHS" + prefix,
-		.params = "const EventLabel *lab",
 		.savedParam = "",
-		.createParams = [&](auto &s) { return s; },
-		.atFinal =
-			[&](auto &s) {
-				return paramsRHS.status +
-				       "Accepting[lab->getStamp().get()] = true;";
-			},
-		.atReturnFalse = [&](auto &s) { return "\t\t\treturn false;"; },
-		.ids = assignStateIDs(nfaRHS.states_begin(), nfaRHS.states_end()),
+		.atFinal = markAccepting("visitedRHS" + prefix),
 		.visit = getStateVisitAssignment(nfaRHS),
 	};
 
 	/* Can we skip visiting the RHS? If so, change the LHS config*/
-	LetStatement *viewLet = nullptr;
 	std::optional<int> rhsViewIdx;
 	auto shouldVisitRHS = true;
+	auto lets = getModule().lets();
+	auto viewLet = std::ranges::find_if(lets, [&](auto &let) {
+		return dynamic_cast<const ViewExp *>(let->getSaved()) &&
+		       *let->getRE() == *subCst->getRHS();
+	});
 	if (subCst->isEmpty()) {
 		/* Case e <= 0 : we can optimize and return false if any accepting is
 		 * reachable */
-		paramsLHS.atFinal = [&](auto &s) { return "\treturn false;\n"; };
-	} else if (std::ranges::any_of(getModule().lets(), [&](auto &let) {
-			   viewLet = &*let;
-			   return dynamic_cast<const ViewExp *>(let->getSaved()) &&
-				  *let->getRE() == *subCst->getRHS();
-		   })) {
+		paramsLHS.atFinal = [](CodeBuilder &c) { c.line("return false;"); };
+	} else if (viewLet != std::ranges::end(lets)) {
 		shouldVisitRHS = false;
-		rhsViewIdx = getPrintedIdx(viewLet);
+		rhsViewIdx = getPrintedIdx(&**viewLet);
 		/* Case e <= VIEW: return false if any accepting is not in view */
-		paramsLHS.params = "const EventLabel *lab, const View &v";
-		paramsLHS.createParams = [&](auto &s) { return s + ", v"; },
-		paramsLHS.atFinal = [&](auto &s) {
-			return "\tif (!v.contains(lab->getPos())) {\n" +
-			       (counterexample ? std::string("cexLab = lab;\n") : std::string("")) +
-			       "\t\treturn false;\n"
-			       "\t}\n";
+		paramsLHS.extraParams = ", const View &v";
+		paramsLHS.atFinal = [counterexample](CodeBuilder &c) {
+			{
+				auto ifContainsScope = c.ifStmt("!v.contains(lab->getPos())");
+				if (counterexample)
+					c.line("cexLab = lab;");
+				c.line("return false;");
+			}
+			c.blank().blank();
 		};
 	}
 
 	/* Print the DFS routines */
-	outputDFSCode(nfaLHS, paramsLHS);
+	outputTraversal(nfaLHS, paramsLHS, TraversalKind::DFS);
 	if (shouldVisitRHS) {
-		outputDFSCode(nfaRHS, paramsRHS);
+		outputTraversal(nfaRHS, paramsRHS, TraversalKind::DFS);
 	}
 
-	/* Print extra arrays used by the DFS routines */
-	hpp() << "\tmutable std::vector<bool> " << paramsLHS.status << "Accepting;\n";
-	if (shouldVisitRHS) {
-		hpp() << "\tmutable std::vector<bool> " << paramsRHS.status << "Accepting;\n";
-	}
-
-	/* Print a "visit" function for the automaton (again based on the RHS) */
-	hpp() << "\tbool "
-	      << "visit" + prefix << "(const EventLabel *lab) const;\n";
-	cpp() << "bool " << className << "::visit" + prefix << "(const EventLabel *lab) const\n"
-	      << "{\n"
-	      << "\tauto &g = *lab->getParent();\n"
-	      << "\n";
-	for (auto &s : nfaLHS.states() | std::views::filter([&](auto &sUP) {
-			       return paramsLHS.visit.at(&*sUP);
-		       })) {
-		cpp() << "\t" << paramsLHS.status << "_" << paramsLHS.ids.at(&*s) << ".clear();\n"
-		      << "\t" << paramsLHS.status << "_" << paramsLHS.ids.at(&*s)
-		      << ".resize(g.getMaxStamp().get() + 1, NodeStatus::unseen);\n";
-	}
-	if (shouldVisitRHS) {
-		for (auto &s : nfaRHS.states() | std::views::filter([&](auto &sUP) {
-				       return paramsRHS.visit.at(&*sUP);
+	auto emitArrayInit = [&](const NFA &nfa, const DFSParameters &params) {
+		for (auto &s : nfa.states() | std::views::filter([&](auto &sUP) {
+				       return params.visit[sUP->getId()];
 			       })) {
-			cpp() << "\t" << paramsRHS.status << "_" << paramsRHS.ids.at(&*s)
-			      << ".clear();\n"
-			      << "\t" << paramsRHS.status << "_" << paramsRHS.ids.at(&*s)
-			      << ".resize(g.getMaxStamp().get() + 1, "
-				 "NodeStatus::unseen);\n";
+			cpp.line("{}_{}.maybeClearResize(g.getMaxStamp().get() + 1);",
+				 params.status, s->getId());
 		}
-	}
-	cpp() << "\t" << paramsLHS.status << "Accepting.clear();\n "
-	      << "\t" << paramsLHS.status
-	      << "Accepting.resize(g.getMaxStamp().get() + 1, false);\n";
+	};
 
+	/* Extra arrays used by the DFS routines */
+	hpp.line("mutable std::vector<bool> {}Accepting;", paramsLHS.status);
 	if (shouldVisitRHS) {
-		cpp() << "\t" << paramsRHS.status << "Accepting.clear();\n"
-		      << "\t" << paramsRHS.status
-		      << "Accepting.resize(g.getMaxStamp().get() + 1, false);\n"
-		      << "\n";
+		hpp.line("mutable std::vector<bool> {}Accepting;", paramsRHS.status);
 	}
 
-	if (!shouldVisitRHS) {
-		cpp() << "\tauto &v = lab->view(" << *rhsViewIdx << ");\n"
-		      << "\n";
-		cpp() << "\treturn true";
-		for (auto &s : nfaLHS.accepting()) {
-			cpp() << "\n\t\t&& " << paramsLHS.name << "_" << paramsLHS.ids.at(s)
-			      << "(lab, v)";
+	/* "visit" function for the automaton (again based on the RHS) */
+	hpp.line("bool visit{}(const EventLabel *lab) const;", prefix);
+	{
+		auto fun = cpp.function("bool {}::visit{}(const EventLabel *lab) const", className,
+					prefix);
+		cpp.line("[[maybe_unused]] auto &g = *lab->getParent();").blank();
+		emitArrayInit(nfaLHS, paramsLHS);
+		if (shouldVisitRHS) {
+			emitArrayInit(nfaRHS, paramsRHS);
 		}
-		cpp() << ";\n"
-		      << "}\n"
-		      << "\n";
-	} else {
-		for (auto &s : nfaLHS.accepting()) {
-			cpp() << "\tif (!" << paramsLHS.name << "_" << paramsLHS.ids.at(s)
-			      << "(lab))\n"
-			      << "\t\treturn false;\n";
+		cpp.line("{}Accepting.clear();", paramsLHS.status)
+			.line("{}Accepting.resize(g.getMaxStamp().get() + 1, false);",
+			      paramsLHS.status);
+		if (shouldVisitRHS) {
+			cpp.line("{}Accepting.clear();", paramsRHS.status)
+				.line("{}Accepting.resize(g.getMaxStamp().get() + 1, false);",
+				      paramsRHS.status);
 		}
-		for (auto &s : nfaRHS.accepting()) {
-			cpp() << "\tif (!" << paramsRHS.name << "_" << paramsRHS.ids.at(s)
-			      << "(lab))\n"
-			      << "\t\treturn false;\n";
-		}
+		cpp.blank();
 
-		cpp() << "\tfor (auto i = 0u; i < " << paramsLHS.status
-		      << "Accepting.size(); i++) {\n"
-		      << "\t\tif (" << paramsLHS.status << "Accepting[i] && !" << paramsRHS.status
-		      << "Accepting[i]) {\n";
-		if (counterexample) {
-			cpp() << "\t\t\tcexLab = &*std::find_if(g.label_begin(), "
-				 "g.label_end(), "
-				 "[&](auto &lab){ "
-				 "return "
-				 "lab.getStamp() == i; });\n";
+		if (!shouldVisitRHS) {
+			if (std::ranges::empty(nfaLHS.accepting()))
+				return;
+
+			cpp.line("auto &v = lab->view({});", *rhsViewIdx).blank();
+
+			cpp.line("/* Explore from all accepting states in LHS using DFS */");
+			emitStartStates(cpp, "startStatesLHS", nfaLHS.accepting(), "lab");
+			cpp.line("return {}Iterative(startStatesLHS, v);", paramsLHS.name);
+		} else {
+			if (!std::ranges::empty(nfaLHS.accepting())) {
+				cpp.line(
+					"/* Explore from all accepting states in LHS using DFS */");
+				emitStartStates(cpp, "startStatesLHS", nfaLHS.accepting(), "lab");
+				cpp.line("if (!{}Iterative(startStatesLHS))", paramsLHS.name);
+				cpp.indented("return false;").blank();
+			}
+
+			if (!std::ranges::empty(nfaRHS.accepting())) {
+				cpp.line(
+					"/* Explore from all accepting states in RHS using DFS */");
+				emitStartStates(cpp, "startStatesRHS", nfaRHS.accepting(), "lab");
+				cpp.line("if (!{}Iterative(startStatesRHS))", paramsRHS.name);
+				cpp.indented("return false;").blank();
+			}
+
+			{
+				auto loopScope =
+					cpp.forLoop("auto i = 0u; i < {}Accepting.size(); i++",
+						    paramsLHS.status);
+				{
+					auto ifAcceptingScope =
+						cpp.ifStmt("{}Accepting[i] && !{}Accepting[i]",
+							   paramsLHS.status, paramsRHS.status);
+					if (counterexample) {
+						cpp.line("cexLab = &*std::find_if(g.label_begin(), "
+							 "g.label_end(), [&](auto &lab){{ return "
+							 "lab.getStamp() == i; }});");
+					}
+					cpp.line("return false;");
+				}
+				cpp.blank();
+			}
+			cpp.line("return true;");
 		}
-		cpp() << "\t\t\treturn false;\n"
-		      << "\t\t}\n"
-		      << "\t}\n"
-		      << "\treturn true;\n"
-		      << "}\n"
-		      << "\n";
 	}
 }
 
 void GenMCPrinter::printUnless(const Constraint *cst, std::string prefix, bool counterexample)
 {
 	if (!cst) {
-		hpp() << "\tbool check" + prefix + "(const EventLabel *lab) { return false; }\n";
+		hppB().line(
+			"bool check{}([[maybe_unused]] const EventLabel *lab) {{ return false; }}",
+			prefix);
 		return;
 	}
 
@@ -1175,12 +1475,13 @@ void GenMCPrinter::printUnless(const Constraint *cst, std::string prefix, bool c
 void GenMCPrinter::printWarning(const WarningConstraint *stmt, std::string prefix)
 {
 	/* Print a "visit" function for the automaton */
-	hpp() << "\tbool "
-	      << "visit" << prefix << "(const EventLabel *lab) const;\n";
-	cpp() << "bool " << className << "::visit" << prefix << "(const EventLabel *lab) const\n"
-	      << "{\n"
-	      << "\treturn false;\n"
-	      << "}\n\n";
+	hppB().line("bool visit{}(const EventLabel *lab) const;", prefix);
+	{
+		auto fn = cppB().function(
+			"bool {}::visit{}([[maybe_unused]] const EventLabel *lab) const", className,
+			prefix);
+		cppB().line("return false;");
+	}
 }
 
 void GenMCPrinter::printAcyclic(const AcyclicConstraint *acycCst, std::string prefix)
@@ -1205,97 +1506,79 @@ void GenMCPrinter::printAcyclic(const AcyclicConstraint *acycCst, std::string pr
 	DFSParameters params = {
 		.name = "visit" + prefix,
 		.status = "visited" + prefix,
-		.params = "const EventLabel *lab",
 		.savedParam = "",
-		.createParams = [&](auto &s) { return s; },
-		.atBegin = [&](auto &s) { return ""; },
-		.atTreeE = [&](auto &s) { return ""; },
-		.atCyclE = [&](auto &s) { return ""; },
-		.atBackE = [&](auto &s) { return ""; },
-		.atForwE = [&](auto &s) { return ""; },
-		.atEnd = [&](auto &s) { return ""; },
-		.atFinal = [&](auto &s) { return ""; },
-		.atReturnFalse = [&](auto &s) { return "\t\t\t\treturn false;"; },
-		.ids = assignStateIDs(nfa.states_begin(), nfa.states_end()),
+		.atCyclE = [](CodeBuilder &c) { c.line("return false; /* cycle detected */"); },
 		.visit = getStateVisitAssignment(nfa),
 	};
-	outputSCCCode(nfa, params);
+	outputTraversal(nfa, params, TraversalKind::SCC);
 
-	// Helper function for printing the initialization code
+	auto &hpp = hppB();
+	auto &cpp = cppB();
 
-	auto printInitializations = [&]() {
-		cpp() << "\t" << params.status + "Accepting = 0;\n";
+	auto emitInits = [&]() {
+		cpp.line("{}Accepting = 0;", params.status);
 		for (auto &sUP : nfa.states() | std::views::filter([&](auto &sUP) {
-					 return params.visit.at(&*sUP);
+					 return params.visit[sUP->getId()];
 				 })) {
-			cpp() << "\t" << params.status << "_" << params.ids.at(&*sUP)
-			      << ".clear();\n"
-			      << "\t" << params.status << "_" << params.ids.at(&*sUP)
-			      << ".resize(g.getMaxStamp().get() + 1);\n";
+			cpp.line("{}_{}.maybeClearResize(g.getMaxStamp().get() + 1);",
+				 params.status, sUP->getId());
 		}
+		cpp.blank();
 	};
 
-	/* Print "visitAcyclic(lab)" and "visitAcyclicFull(G)" for the constraint */
-	hpp() << "\tbool "
-	      << "visit" << prefix << "(const EventLabel *lab) const;\n"
-	      << "\n";
-	cpp() << "bool " << className << "::visit" << prefix << "(const EventLabel *lab) const\n"
-	      << "{\n"
-	      << "\tauto &g = *lab->getParent();\n"
-	      << "\n";
-	printInitializations();
-	cpp() << "\treturn true";
-	/* Don't visit all states: for incremental checks, visit the ones you can enter with po/rf.
-	 * NOTE: We use po and not po_imm below (even though the NFAs use po_imm) because the
-	 * user is now allowed to use po_imm (so all po_imms are po_imm+), and we assume that only
-	 * po_imm is included in itself. */
-	for (auto &sUP : nfa.states()) {
-		auto ts = shouldPrintSuccAcycChecks() ? sUP->ins() : sUP->outs();
-		if (std::ranges::all_of(ts, [&](auto &t) {
-			    auto rOpt = t.label.getRelation();
-			    return rOpt.has_value() && !rOpt->isInverse() &&
-				   (getModule().getTheory().isIncludedIn(
-					    *rOpt,
-					    Relation::createBuiltin(Relation::BuiltinID::po)) ||
-				    getModule().getTheory().isIncludedIn(
-					    *rOpt,
-					    Relation::createBuiltin(Relation::BuiltinID::rf)) ||
-				    !rOpt->isBuiltin());
-		    })) {
-			continue;
-		}
-		cpp() << "\n\t\t&& (";
-		if (params.visit.at(&*sUP)) {
-			cpp() << params.status << "_" << params.ids.at(&*sUP)
-			      << "[lab->getStamp().get()]"
-			      << ".status != NodeStatus::unseen || ";
-		}
-		cpp() << params.name << "_" << params.ids.at(&*sUP) << "(lab))";
-	}
-	cpp() << ";\n"
-	      << "}\n"
-	      << "\n";
+	/* "visit<Prefix>(lab)" -- incremental version. */
+	hpp.line("bool visit{}(const EventLabel *lab) const;", prefix).blank();
+	{
+		auto fnScope = cpp.function("bool {}::visit{}(const EventLabel *lab) const",
+					    className, prefix);
+		cpp.line("[[maybe_unused]] auto &g = *lab->getParent();").blank();
+		emitInits();
 
-	hpp() << "\tbool "
-	      << "visit" << prefix << "Full(const ExecutionGraph &g) const;\n"
-	      << "\n";
-	cpp() << "bool " << className << "::visit" << prefix
-	      << "Full(const ExecutionGraph &g) const\n"
-	      << "{\n";
-	printInitializations();
-	cpp() << "\treturn true";
-	for (auto &sUP : nfa.accepting()) {
-		cpp() << "\n\t\t&& std::ranges::all_of(g.labels(), [&](auto &lab){ return ";
-		if (params.visit.at(&*sUP)) {
-			cpp() << params.status << "_" << params.ids.at(&*sUP)
-			      << "[lab.getStamp().get()]"
-			      << ".status != NodeStatus::unseen || ";
+		/* Don't visit all states: for incremental checks, visit the ones you can
+		 * enter with po/rf. NOTE: We use po and not po_imm below (even though the
+		 * NFAs use po_imm) because the user is now allowed to use po_imm (so all
+		 * po_imms are po_imm+), and we assume that only po_imm is included in
+		 * itself. */
+		cpp.line("/* States we need to explore from using DFS */");
+		cpp.line("std::vector<DFSWorklistEntry> startStates = {{");
+		for (auto &sUP : nfa.states() | std::views::reverse) {
+			auto startStatesDefScope = cpp.bump();
+			auto ts = shouldPrintSuccAcycChecks() ? sUP->ins() : sUP->outs();
+			if (std::ranges::all_of(ts, [&](auto &t) {
+				    auto rOpt = t.label.getRelation();
+				    return rOpt.has_value() && !rOpt->isInverse() &&
+					   (getModule().getTheory().isIncludedIn(
+						    *rOpt, Relation::createBuiltin(
+								   Relation::BuiltinID::po)) ||
+					    getModule().getTheory().isIncludedIn(
+						    *rOpt, Relation::createBuiltin(
+								   Relation::BuiltinID::rf)) ||
+					    !rOpt->isBuiltin());
+			    })) {
+				continue;
+			}
+			cpp.line("{{ {}, lab }},", sUP->getId());
 		}
-		cpp() << params.name << "_" << params.ids.at(&*sUP) << "(&lab); })";
+		cpp.line("}};").blank();
+		cpp.line("return {}Iterative(startStates);", params.name);
 	}
-	cpp() << ";\n"
-	      << "}\n"
-	      << "\n";
+
+	/* "visit<Prefix>Full(g)" -- full-graph version. */
+	hpp.line("bool visit{}Full(const ExecutionGraph &g) const;", prefix).blank();
+	{
+		auto fnFullScope = cpp.function(
+			"bool {}::visit{}Full(const ExecutionGraph &g) const", className, prefix);
+		emitInits();
+
+		{
+			auto initStartStatesScope = cpp.lambda("auto exploreLab = [&](auto &lab)");
+			cpp.line("/* Explore from all accepting states using DFS */");
+			emitStartStates(cpp, "startStates", nfa.accepting(), "&lab");
+			cpp.line("return {}Iterative(startStates);", params.name);
+		}
+
+		cpp.line("return std::ranges::all_of(g.labels(), exploreLab);");
+	}
 }
 
 void GenMCPrinter::printCoherence(const CoherenceConstraint *cohCst)
@@ -1303,7 +1586,7 @@ void GenMCPrinter::printCoherence(const CoherenceConstraint *cohCst)
 	auto s = std::string(coherenceFuns);
 	replaceAll(s, "#CLASS#", className);
 	replaceAll(s, "#HB#", std::to_string(getPrintedIdx(getModule().getCOHDeclaration())));
-	cpp() << s << "\n";
+	cppB().line("{}", s);
 
 	// For coherence, we detect violations by performing multiple DFSs (for each memory access).
 	// In contrast to acyclicity, we don't take the reflexive-transitive closure here.
@@ -1328,57 +1611,49 @@ void GenMCPrinter::printCoherence(const CoherenceConstraint *cohCst)
 	DFSParameters params = {
 		.name = "visit" + prefix,
 		.status = "visited" + prefix,
-		.params = "const EventLabel *lab, const EventLabel *initLab",
+		.extraParams = ", const EventLabel *initLab",
 		.savedParam = "",
-		.createParams = [&](auto &s) { return s + ", initLab"; },
-		.atBegin = [&](auto &s) { return ""; },
-		.atTreeE = [&](auto &s) { return ""; },
-		.atCyclE = [&](auto &s) { return ""; },
-		.atBackE = [&](auto &s) { return ""; },
-		.atForwE = [&](auto &s) { return ""; },
-		.atEnd = [&](auto &s) { return ""; },
-		.atFinal = [&](auto &s) { return "if (lab == initLab) return false;"; },
-		.atReturnFalse = [&](auto &s) { return "return false;"; },
-		.ids = assignStateIDs(nfa.states_begin(), nfa.states_end()),
+		.atFinal = [](CodeBuilder &c) { c.line("if (lab == initLab) return false;"); },
 		.visit = getStateVisitAssignment(nfa),
 	};
-	outputDFSCode(nfa, params);
+	outputTraversal(nfa, params, TraversalKind::DFS);
 
-	// Helper function for printing the initialization code
+	auto &c = cppB();
+	auto &h = hppB();
+
+	// Helper that emits the per-state init lines at the current level.
 	auto printInitializations = [&]() {
-		for (auto &sUP : nfa.states() | std::views::filter([&](auto &sUP) {
-					 return params.visit.at(&*sUP);
-				 })) {
-			cpp() << "\t\t" << params.status << "_" << params.ids.at(&*sUP)
-			      << ".clear();\n"
-			      << "\t\t" << params.status << "_" << params.ids.at(&*sUP)
-			      << ".resize(g.getMaxStamp().get() + 1);\n";
+		for (auto &iSUP : nfa.states() | std::views::filter([&](auto &s) {
+					  return params.visit[s->getId()];
+				  })) {
+			c.line("{}_{}.maybeClearResize(g.getMaxStamp().get() + 1);", params.status,
+			       iSUP->getId());
 		}
+		c.blank();
 	};
 
 	/* Print only a "visitCoherenceRelinche(G)" for the constraint */
-	hpp() << "\tbool "
-	      << "visit" << prefix << "Relinche(const ExecutionGraph &g) const;\n"
-	      << "\n";
-	cpp() << "bool " << className << "::visit" << prefix
-	      << "Relinche(const ExecutionGraph &g) const\n"
-	      << "{\n";
-	for (auto &sUP : nfa.accepting()) {
-		cpp() << "\tfor (auto &lab : g.labels()) {\n"
-		      << "\t\tif (!genmc::isa<MethodBeginLabel>(&lab)) continue;\n";
-		printInitializations();
-		cpp() << "\t\tif (true ";
-		if (params.visit.at(&*sUP)) {
-			cpp() << "&& " << params.status << params.ids.at(&*sUP)
-			      << "[lab.getStamp().get()] == NodeStatus::unseen ";
+	h.line("bool visit{}Relinche(const ExecutionGraph &g) const;", prefix).blank();
+	{
+		auto fn = c.function("bool {}::visit{}Relinche(const ExecutionGraph &g) const",
+				     className, prefix);
+		for (auto &sUP : nfa.accepting()) {
+			auto loop = c.forLoop("auto &lab : g.labels()");
+			c.line("if (!genmc::isa<MethodBeginLabel>(&lab))");
+			c.indented("continue;").blank();
+			printInitializations();
+
+			/* Explore from single accepting state only, we need to reset vectors before
+			 * every DFS run. */
+			c.line("/* Explore from this accepting state using DFS */");
+			c.line("std::vector<DFSWorklistEntry> startState = {{ {{ {}, &lab }} }};",
+			       sUP->getId());
+
+			c.line("if (!{}Iterative(startState, &lab /* initLab */))", params.name);
+			c.indented("return false;");
 		}
-		cpp() << "&& !" << params.name << "_" << params.ids.at(&*sUP) << "(&lab, &lab))\n"
-		      << "\t\t\treturn false;\n";
-		cpp() << "\t}\n";
+		c.line("return true;");
 	}
-	cpp() << "\treturn true;\n"
-	      << "}\n"
-	      << "\n";
 }
 
 void GenMCPrinter::printCalculator(const LetStatement *let, std::string prefix, std::string name)
@@ -1394,147 +1669,139 @@ void GenMCPrinter::printCalculator(const LetStatement *let, std::string prefix, 
 	DFSParameters params = {
 		.name = "visit" + prefix,
 		.status = "visited" + prefix,
-		.params = "const EventLabel *lab, " + paramType + " &calcRes",
+		.extraParams = ", " + paramType + " &calcRes",
 		.savedParam = "calcRes",
-		.createParams = [&](auto &s) { return s + ", calcRes"; },
-		.atBegin = [&](auto &s) { return ""; },
-		.atTreeE = [&](auto &s) { return ""; },
-		.atCyclE = [&](auto &s) { return ""; },
-		.atBackE = [&](auto &s) { return ""; },
-		.atForwE = [&](auto &s) { return ""; },
-		.atEnd = [&](auto &s) { return ""; },
-		.atFinal = [&](auto &s) { return ""; },
-		.atReturnFalse = [&](auto &s) { return "\t\t\t\treturn false;"; },
-		.ids = assignStateIDs(nfa.states_begin(), nfa.states_end()),
 		.visit = getStateVisitAssignment(nfa),
-
 	};
-	outputDFSCode(nfa, params);
+	outputTraversal(nfa, params, TraversalKind::DFS);
 
-	/* Print "visitCalc(lab) for the calculation */
-	hpp() << "\t" << paramType << " visit" << prefix << "(const EventLabel *lab) const;\n";
-	cpp() << paramType << " " << className << "::visit" << prefix
-	      << "(const EventLabel *lab) const\n"
-	      << "{\n"
-	      << "\tauto &g = *lab->getParent();\n"
-	      << "\t" << paramType << " calcRes;\n"
-	      << "\n"
-	      << (isView ? "calcRes.updateIdx(lab->getPos());\n" : "FIXME") << "\n";
-	for (auto &sUP :
-	     nfa.states() | std::views::filter([&](auto &sUP) { return params.visit.at(&*sUP); })) {
-		cpp() << "\t" << params.status << "_" << params.ids.at(&*sUP) << ".clear();\n"
-		      << "\t" << params.status << "_" << params.ids.at(&*sUP)
-		      << ".resize(g.getMaxStamp().get() + 1);\n";
-	}
-	cpp() << "\n";
-	for (auto &sUP : nfa.accepting()) {
-		cpp() << "\t" << params.name << "_" << params.ids.at(&*sUP) << "(lab, calcRes);\n";
-	}
-	cpp() << "\treturn calcRes;\n"
-	      << "}\n";
+	auto &h = hppB();
+	auto &c = cppB();
 
-	/* Print a getter for result */
-	hpp() << "\tconst " << paramType << "&get" << name << ((isView) ? "View" : "Set")
-	      << "(const EventLabel *lab) const { return lab->"
-	      << ((isView) ? "view" : "calculated") << "(" << getPrintedIdx(let) << "); }\n"
-	      << "\n";
+	/* "visitCalc(lab)" -- compute the saved value. */
+	h.line("{} visit{}(const EventLabel *lab) const;", paramType, prefix);
+	{
+		auto fn = c.function("{} {}::visit{}(const EventLabel *lab) const", paramType,
+				     className, prefix);
+		c.line("[[maybe_unused]] auto &g = *lab->getParent();")
+			.line("{} calcRes;", paramType)
+			.blank();
+		c.line("{}", isView ? "calcRes.updateIdx(lab->getPos());" : "FIXME");
+		for (auto &sUP : nfa.states() | std::views::filter([&](auto &sUP) {
+					 return params.visit[sUP->getId()];
+				 })) {
+			c.line("{}_{}.maybeClearResize(g.getMaxStamp().get() + 1);", params.status,
+			       sUP->getId());
+		}
+		c.blank();
+
+		c.line("/* Explore from all accepting states using DFS */");
+		emitStartStates(c, "startStates", nfa.accepting(), "lab");
+
+		c.line("{}Iterative(startStates, calcRes);", params.name);
+		c.line("return calcRes;");
+	}
+
+	/* Getter for the saved result. */
+	h.line("auto get{}{}(const EventLabel *lab) const -> const {} & {{ return lab->{}({}); }}",
+	       name, isView ? "View" : "Set", paramType, isView ? "view" : "calculated",
+	       getPrintedIdx(let))
+		.blank();
 }
 
 void GenMCPrinter::printPPoRfHpp(const NFA &nfa, bool deps)
 {
-	auto ids = assignStateIDs(nfa.states_begin(), nfa.states_end());
+	const auto vt = deps ? "DepView" : "View";
 
 	/* visitPPoRfXX for each state */
 	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
-		hpp() << "\tvoid visitPPoRf" << ids[&*s] << "(const EventLabel *lab, "
-		      << (deps ? "DepView" : "View") << " &pporf) const;\n";
+		hppB().line("void visitPPoRf{}(const EventLabel *lab, {} &pporf) const;",
+			    s->getId(), vt);
 	});
-	hpp() << "\n";
+	hppB().blank();
 
 	/* calcPPoRfBefore for the automaton */
-	hpp() << "\t" << (deps ? "DepView" : "View")
-	      << " calcPPoRfBefore(const EventLabel *lab) const;\n";
-	hpp() << "\n";
+	hppB().line("{} calcPPoRfBefore(const EventLabel *lab) const;", vt).blank();
 
 	/* status arrays */
 	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
-		hpp() << "\tmutable std::vector<NodeStatus> visitedPPoRf" << ids[&*s] << ";\n";
+		hppB().line("mutable std::vector<NodeStatus> visitedPPoRf{};", s->getId());
 	});
-	hpp() << "\n";
+	hppB().blank();
 }
 
 void GenMCPrinter::printPPoRfCpp(const NFA &nfa, bool deps)
 {
+	auto &c = cppB();
+	const auto vt = deps ? "DepView" : "View";
+
 	/* Optimization for non-dep-tracking models */
 	if (!deps) {
-		cpp() << (deps ? "DepView " : "View ") << className
-		      << "::calcPPoRfBefore(const EventLabel *lab) const\n"
-		      << "{\n"
-		      << "\tauto &g = *lab->getParent();\n"
-		      << "\tView pporf;\n"
-		      << "\tpporf.updateIdx(lab->getPos());\n"
-		      << "\n"
-		      << "\tauto *pLab = g.po_imm_pred(lab);\n"
-		      << "\tif (!pLab)\n"
-		      << "\t\treturn pporf;\n"
-		      << "\tpporf.update(pLab->getPrefixView());\n"
-		      << "\tif (auto *rLab = genmc::dyn_cast<ReadLabel>(pLab))\n"
-		      << "\t\tpporf.update(rLab->getRf()->getPrefixView());\n"
-		      << "\tauto *tsLab = genmc::dyn_cast<ThreadStartLabel>(pLab);\n"
-		      << "\tif (tsLab && tsLab->getCreate())\n"
-		      << "\t\tpporf.update(tsLab->getCreate()->getPrefixView());\n"
-		      << "\tif (auto *tjLab = genmc::dyn_cast<ThreadJoinLabel>(pLab))\n"
-		      << "\t\tpporf.update(g.getLastThreadLabel(tjLab->getChildId())->"
-			 "getPrefixView());\n"
-		      << "\treturn pporf;\n"
-		      << "}\n";
+		auto fn = c.function("{} {}::calcPPoRfBefore(const EventLabel *lab) const", vt,
+				     className);
+		c.line("[[maybe_unused]] auto &g = *lab->getParent();")
+			.line("View pporf;")
+			.line("pporf.updateIdx(lab->getPos());")
+			.blank()
+			.line("if (auto *pLab = g.po_imm_pred(lab); pLab)")
+			.indented("pporf.update(pLab->getPrefixView());");
+		c.line("if (auto *rLab = genmc::dyn_cast<ReadLabel>(lab); rLab && rLab->getRf())")
+			.indented("pporf.update(rLab->getRf()->getPrefixView());");
+		c.line("auto *tsLab = genmc::dyn_cast<ThreadStartLabel>(lab);")
+			.line("if (tsLab && tsLab->getCreate())")
+			.indented("pporf.update(tsLab->getCreate()->getPrefixView());");
+		c.line("if (auto *tjLab = genmc::dyn_cast<ThreadJoinLabel>(lab))")
+			.indented("pporf.update(g.getLastThreadLabel(tjLab->getChildId())"
+				  "->getPrefixView());");
+		c.line("return pporf;");
 		return;
 	}
 
-	auto ids = assignStateIDs(nfa.states_begin(), nfa.states_end());
-
 	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
-		cpp() << "void " << className << "::visitPPoRf" << ids[&*s]
-		      << "(const EventLabel *lab, " << (deps ? "DepView" : "View")
-		      << " &pporf) const\n"
-		      << "{\n"
-		      << "\tauto &g = *lab->getParent();\n"
-		      << "\n"
-		      << "\tvisitedPPoRf" << ids[&*s]
-		      << "[lab->getStamp().get()] = NodeStatus::entered;\n";
-		if (s->isStarting()) {
-			cpp() << "\tpporf.updateIdx(lab->getPos());\n";
+		{
+			auto fn = c.function(
+				"void {}::visitPPoRf{}(const EventLabel *lab, {} &pporf) const",
+				className, s->getId(), vt);
+			c.line("[[maybe_unused]] auto &g = *lab->getParent();")
+				.blank()
+				.line("visitedPPoRf{}[lab->getStamp().get()] = "
+				      "NodeStatus::entered;",
+				      s->getId());
+			if (s->isStarting()) {
+				c.line("pporf.updateIdx(lab->getPos());");
+			}
+			std::for_each(s->in_begin(), s->in_end(), [&](auto &t) {
+				/* printTransLabel returns an "if (...)" predicate
+				 * fragment; pair it with kr() to open the brace and
+				 * indent the body. */
+				auto trans = c.kr("{}", printTransLabel(t, "pLab", "lab", "pporf"));
+				c.line("auto status = "
+				       "visitedPPoRf{}[pLab->getStamp().get()];",
+				       t.dest->getId())
+					.line("if (status == NodeStatus::unseen)")
+					.indented("visitPPoRf{}(pLab, pporf);", t.dest->getId());
+			});
+			c.line("visitedPPoRf{}[lab->getStamp().get()] = NodeStatus::left;",
+			       s->getId());
 		}
-		std::for_each(s->in_begin(), s->in_end(), [&](auto &t) {
-			cpp() << "\t";
-			printTransLabel(cpp(), t, "pLab", "lab", "pporf");
-			cpp() << " {\n"
-			      << "\t\tauto status = visitedPPoRf" << ids[t.dest]
-			      << "[pLab->getStamp().get()];\n"
-			      << "\t\tif (status == NodeStatus::unseen)\n"
-			      << "\t\t\tvisitPPoRf" << ids[t.dest] << "(pLab, pporf);\n"
-			      << "\t}\n";
-		});
-		cpp() << "\tvisitedPPoRf" << ids[&*s]
-		      << "[lab->getStamp().get()] = NodeStatus::left;\n"
-		      << "}\n"
-		      << "\n";
 	});
 
-	cpp() << (deps ? "DepView " : "View ") << className
-	      << "::calcPPoRfBefore(const EventLabel *lab) const\n"
-	      << "{\n"
-	      << "\tauto &g = *lab->getParent();\n"
-	      << "\t" << (deps ? "DepView" : "View") << " pporf;\n"
-	      << "\tpporf.updateIdx(lab->getPos());\n";
-	std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
-		cpp() << "\tvisitedPPoRf" << ids[&*s] << ".clear();\n"
-		      << "\tvisitedPPoRf" << ids[&*s]
-		      << ".resize(g.getMaxStamp().get() + 1, NodeStatus::unseen);\n";
-	});
-	cpp() << "\n";
-	std::for_each(nfa.accept_begin(), nfa.accept_end(),
-		      [&](auto &a) { cpp() << "\tvisitPPoRf" << ids[a] << "(lab, pporf);\n"; });
-	cpp() << "\treturn pporf;\n"
-	      << "}\n";
+	{
+		auto fn = c.function("{} {}::calcPPoRfBefore(const EventLabel *lab) const", vt,
+				     className);
+		c.line("[[maybe_unused]] auto &g = *lab->getParent();")
+			.line("{} pporf;", vt)
+			.line("pporf.updateIdx(lab->getPos());");
+		std::for_each(nfa.states_begin(), nfa.states_end(), [&](auto &s) {
+			c.line("visitedPPoRf{}.clear();", s->getId())
+				.line("visitedPPoRf{}.resize(g.getMaxStamp().get() + 1, "
+				      "NodeStatus::unseen);",
+				      s->getId());
+		});
+		c.blank();
+		std::for_each(nfa.accept_begin(), nfa.accept_end(), [&](auto &acc) -> void {
+			c.line("visitPPoRf{}(lab, pporf);", acc->getId());
+		});
+		c.line("return pporf;");
+	}
 }

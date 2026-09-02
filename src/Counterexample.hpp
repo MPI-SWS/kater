@@ -23,6 +23,8 @@
 #include <iostream>
 #include <vector>
 
+class Theory;
+
 class Counterexample {
 
 private:
@@ -70,7 +72,8 @@ public:
 		}
 	}
 
-	friend auto operator<<(std::ostream &ostr, const Counterexample &c) -> std::ostream &;
+	/** Prints the witness word, marking the mismatch; resolves names if THEORY is given */
+	auto dump(std::ostream &ostr, const Theory *theory = nullptr) const -> std::ostream &;
 
 private:
 	ContainerT cex;

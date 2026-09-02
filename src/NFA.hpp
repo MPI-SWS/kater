@@ -20,14 +20,17 @@
 #define KATER_NFA_HPP
 
 #include "Counterexample.hpp"
+#include "Error.hpp"
 #include "TransLabel.hpp"
 #include "VSet.hpp"
 
 #include <algorithm>
+#include <cassert>
+#include <compare>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <numeric>
-#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -39,28 +42,7 @@ class NFA {
 public:
 	class State;
 
-	/* There are no heterogenous lookups before C++20,
-	 * so let's just use a UPs with a custom deleter  */
-	template <class T> struct maybe_deleter {
-		bool _delete;
-		explicit maybe_deleter(bool doit = true) : _delete(doit) {}
-
-		void operator()(T *p) const
-		{
-			if (_delete) {
-				delete p;
-			}
-		}
-	};
-
-	template <class T> using set_unique_ptr = std::unique_ptr<T, maybe_deleter<T>>;
-
-	template <class T> auto make_find_ptr(T *raw) -> set_unique_ptr<T>
-	{
-		return set_unique_ptr<T>(raw, maybe_deleter<T>(false));
-	}
-
-	using StateUPVectorT = std::vector<set_unique_ptr<State>>;
+	using StateUPVectorT = std::vector<std::unique_ptr<State>>;
 	using StateVectorT = std::vector<State *>;
 
 	/*
@@ -73,11 +55,7 @@ public:
 		Transition() = delete;
 		Transition(const TransLabel &lab, State *dest) : label(lab), dest(dest) {}
 
-		auto copyTo(State *s) const -> Transition
-		{
-			auto l = label;
-			return {l, s};
-		}
+		auto copyTo(State *s) const -> Transition { return {label, s}; }
 
 		/* Returns a transition with the label flipped,
 		 * and the destination changed to DEST */
@@ -88,7 +66,18 @@ public:
 			return {l, s};
 		}
 
-		inline auto operator<=>(const Transition &) const noexcept = default;
+		/* Order by destination ID, not address: exports must not depend on the
+		 * allocator */
+		auto operator<=>(const Transition &other) const -> std::strong_ordering
+		{
+			if (auto cmp = dest->getId() <=> other.dest->getId(); cmp != 0)
+				return cmp;
+			return label <=> other.label;
+		}
+		auto operator==(const Transition &other) const -> bool
+		{
+			return dest == other.dest && label == other.label;
+		}
 	};
 
 	/*
@@ -205,6 +194,7 @@ public:
 
 	protected:
 		friend NFA;
+		void setId(unsigned newId) { id = newId; }
 		void setStarting(bool b) { starting = b; }
 		void setAccepting(bool b) { accepting = b; }
 
@@ -254,6 +244,10 @@ public:
 		[[nodiscard]] auto getIncoming() const -> const TransitionsC & { return inverse; }
 		auto getIncoming() -> TransitionsC & { return inverse; }
 
+		/*
+		 * Invariant: IDs are dense (position in states vector). Adding/removing
+		 * states restores it via compressStateIDs()
+		 */
 		unsigned id;
 		bool starting;
 		bool accepting;
@@ -290,6 +284,13 @@ public:
 
 	[[nodiscard]] auto getNumStates() const { return getStates().size(); }
 
+	/* Returns the state with ID (IDs are dense, so this is a plain lookup) */
+	[[nodiscard]] auto operator[](unsigned id) const -> State *
+	{
+		VERIFY(id < getNumStates());
+		return getStates()[id].get();
+	}
+
 	[[nodiscard]] auto getNumStarting() const { return getStarting().size(); }
 
 	[[nodiscard]] auto getNumAccepting() const { return getAccepting().size(); }
@@ -307,8 +308,7 @@ public:
 	 * Returns the newly added state */
 	auto createState() -> State *
 	{
-		static unsigned counter = 0;
-		return getStates().emplace_back(new State(counter++)).get();
+		return getStates().emplace_back(new State(getNumStates())).get();
 	}
 
 	auto createStarting() -> State *
@@ -386,21 +386,17 @@ public:
 		if (ait != getAccepting().end()) {
 			getAccepting().erase(ait);
 		}
-		return getStates().erase(it);
+		auto nextIt = getStates().erase(it);
+		compressStateIDs();
+		return nextIt;
 	}
 
 	/* Removes STATE from the NFA and its inverse */
 	void removeState(State *state)
 	{
-		auto it = std::find(states_begin(), states_end(), make_find_ptr(state));
-		if (it != states_end()) {
-			removeState(it);
-		}
-	}
-
-	template <typename ITER> void removeStates(ITER &&begin, ITER &&end)
-	{
-		std::for_each(begin, end, [&](State *s) { removeState(s); });
+		auto it = states_begin() + state->getId();
+		VERIFY(it->get() == state, "a state's ID is its index");
+		removeState(it);
 	}
 
 	template <typename F> void removeStatesIf(F &&pred)
@@ -412,6 +408,7 @@ public:
 		std::erase_if(getStarting(), pred);
 		std::erase_if(getAccepting(), pred);
 		std::erase_if(getStates(), [&](auto &sUP) { return pred(sUP.get()); });
+		compressStateIDs();
 	}
 
 	/* Creates a copy D of S such that S only keeps (incoming)
@@ -549,6 +546,8 @@ public:
 	}
 
 	auto flip() -> NFA &;
+	/** Adds OTHER's states after ours, so its state i becomes our
+	 * getNumStates()+i (read the count before calling) */
 	auto alt(NFA &&other) -> NFA &;
 	auto seq(NFA &&other) -> NFA &;
 	auto or_empty() -> NFA &;
@@ -558,11 +557,11 @@ public:
 	template <typename F>
 	void foreachPathReachableFrom(const std::vector<State *> &ss, F &&fun) const
 	{
-		std::unordered_set<State *> visited;
+		std::vector<uint8_t> visited(getNumStates(), 0);
 		std::vector<State *> workList;
 
 		for (auto *s : ss) {
-			visited.insert(s);
+			visited[s->getId()] = 1;
 			workList.push_back(s);
 		}
 		while (!workList.empty()) {
@@ -570,10 +569,10 @@ public:
 			workList.pop_back();
 			for (auto it = s->out_begin(); it != s->out_end(); it++) {
 				fun({s, *it});
-				if (visited.count(it->dest)) {
+				if (visited[it->dest->getId()] != 0) {
 					continue;
 				}
-				visited.insert(it->dest);
+				visited[it->dest->getId()] = 1;
 				workList.push_back(it->dest);
 			}
 		}
@@ -593,16 +592,22 @@ public:
 	[[nodiscard]] auto acceptsEmptyString() const -> bool;
 	auto acceptsNoString(Counterexample &cex) const -> bool;
 
-	[[nodiscard]] auto to_DFA() const -> std::pair<NFA, std::map<State *, std::set<State *>>>;
+	/* Determinizes via the subset construction. Alongside the DFA, returns the
+	 * subset each DFA state stands for, as sorted NFA state IDs indexed by DFA
+	 * state ID */
+	[[nodiscard]] auto to_DFA() const -> std::pair<NFA, std::vector<std::vector<unsigned>>>;
 
 	friend auto operator<<(std::ostream &ostr, const NFA &nfa) -> std::ostream &;
-	template <typename T>
-	friend auto operator<<(std::ostream &ostr, const std::set<T> &s) -> std::ostream &;
-	template <typename ITER>
-	friend auto assignStateIDs(ITER &&begin, ITER &&end)
-		-> std::unordered_map<NFA::State *, unsigned>;
 
 private:
+	void compressStateIDs()
+	{
+		unsigned id = 0;
+		for (auto &s : states()) {
+			s->setId(id++);
+		}
+	}
+
 	[[nodiscard]] auto getStates() const -> const StateUPVectorT & { return nfa; }
 	auto getStates() -> StateUPVectorT & { return nfa; }
 
